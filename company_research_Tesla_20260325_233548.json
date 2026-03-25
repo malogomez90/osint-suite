@@ -1,0 +1,46 @@
+{
+    "company_name": "Tesla",
+    "search_timestamp": "2026-03-25T23:35:48.256044",
+    "country_code": "US",
+    "registers_to_check": [
+        {
+            "name": "SEC EDGAR",
+            "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=Tesla",
+            "type": "official"
+        },
+        {
+            "name": "OpenCorporates",
+            "url": "https://opencorporates.com/companies?jurisdiction_code=&q=Tesla&utf8=%E2%9C%93",
+            "type": "aggregator"
+        },
+        {
+            "name": "state",
+            "url": "Varía por estado (Secretary of State)",
+            "type": "official"
+        }
+    ],
+    "direct_links": {
+        "OpenCorporates": "https://opencorporates.com/companies?q=Tesla",
+        "Crunchbase": "https://www.crunchbase.com/textsearch?q=Tesla",
+        "LinkedIn": "https://www.linkedin.com/company/tesla",
+        "Wikipedia": "https://en.wikipedia.org/wiki/Tesla"
+    },
+    "recommendations": [
+        "Buscar 'Tesla' en OpenCorporates (agregador global)",
+        "Verificar presencia en LinkedIn de la empresa",
+        "Buscar 'Tesla' en Google News para noticias recientes",
+        "Verificar en SEC EDGAR si es empresa pública (CIK number)",
+        "Buscar en Secretary of State del estado de incorporación",
+        "Verificar EIN (Employer Identification Number) en IRS",
+        "Buscar dominios web asociados (whois history)",
+        "Verificar presencia en redes sociales corporativas",
+        "Buscar en Wayback Machine para versiones históricas de web",
+        "Revisar Glassdoor/Indeed para información de empleados"
+    ],
+    "notes": [
+        "Algunos registros requieren registro gratuito para acceso completo",
+        "La información disponible varía según el país y tipo de empresa",
+        "Empresas privadas tienen menos información pública que las públicas",
+        "Verificar siempre múltiples fuentes para confirmar datos"
+    ]
+}

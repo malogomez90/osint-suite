@@ -197,7 +197,7 @@ class GeolocationHelper:
                 pass
         
         # 3. DMS: "40° 42' 46" N" o "40°42'46\"N"
-        dms_pattern = r'(\\d+)°\\s*(\\d+)\\'\\s*(\\d+\\.?\\d*)"?\\s*([NS])[,\\s]+(\\d+)°\\s*(\\d+)\\'\\s*(\\d+\\.?\\d*)"?\\s*([EW])'
+        dms_pattern = r'(\d+)°\s*(\d+)\'\s*(\d+\.?\d*)\"?\s*([NS])[,\\s]+(\d+)°\s*(\d+)\'\s*(\d+\.?\d*)\"?\s*([EW])'
         match = re.search(dms_pattern, input_str, re.IGNORECASE)
         if match:
             try:

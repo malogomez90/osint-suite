@@ -1,0 +1,55 @@
+{
+    "input": {
+        "latitude": 40.7128,
+        "longitude": -74.006,
+        "altitude": null
+    },
+    "formats": {
+        "decimal": "40.712800, -74.006000",
+        "dms": {
+            "latitude": {
+                "degrees": 40,
+                "minutes": 42,
+                "seconds": 46.08,
+                "direction": "N",
+                "formatted": "40° 42' 46.08\\\" N"
+            },
+            "longitude": {
+                "degrees": 74,
+                "minutes": 0,
+                "seconds": 21.6,
+                "direction": "W",
+                "formatted": "74° 0' 21.60\\\" W"
+            }
+        },
+        "utm": {
+            "zone_number": 18,
+            "zone_letter": "T",
+            "zone": "18T",
+            "easting": null,
+            "northing": null,
+            "note": "Conversión UTM completa requiere librerías adicionales (pyproj)"
+        },
+        "mgrs": "18T (MGRS completo requiere cálculo adicional)"
+    },
+    "location_info": {
+        "hemisphere_ns": "Norte",
+        "hemisphere_ew": "Oeste",
+        "meridian": "Oeste del meridiano de Greenwich",
+        "approx_timezone": "UTC-5",
+        "approx_address": "New York City Hall, 260, Broadway, Tribeca, Lower Manhattan, Manhattan, New York County, New York, 10000, United States"
+    },
+    "map_urls": {
+        "google_maps": "https://www.google.com/maps?q=40.7128,-74.006",
+        "google_maps_satellite": "https://www.google.com/maps?t=k&q=40.7128,-74.006",
+        "openstreetmap": "https://www.openstreetmap.org/?mlat=40.7128&mlon=-74.006#map=15/40.7128/-74.006",
+        "bing_maps": "https://www.bing.com/maps?v=2&cp=40.7128~-74.006&lvl=15",
+        "wikimapia": "http://wikimapia.org/#lat=40.7128&lon=-74.006&z=15",
+        "google_earth_web": "https://earth.google.com/web/@40.7128,-74.006,500a,0d,30y,0h,0t,0r",
+        "osm_query": "https://nominatim.openstreetmap.org/reverse?format=json&lat=40.7128&lon=-74.006"
+    },
+    "analysis": {
+        "likely_ocean": false,
+        "climate_zone": "Templado"
+    }
+}
