@@ -17,13 +17,6 @@
             "profile_url": "https://www.youtube.com/@elonmusk"
         },
         {
-            "platform": "Instagram",
-            "url": "https://www.instagram.com/elonmusk/",
-            "exists": true,
-            "status_code": 200,
-            "profile_url": "https://www.instagram.com/elonmusk/"
-        },
-        {
             "platform": "GitHub",
             "url": "https://github.com/elonmusk",
             "exists": true,
@@ -31,18 +24,11 @@
             "profile_url": "https://github.com/elonmusk"
         },
         {
-            "platform": "TikTok",
-            "url": "https://www.tiktok.com/@elonmusk",
+            "platform": "Instagram",
+            "url": "https://www.instagram.com/elonmusk/",
             "exists": true,
             "status_code": 200,
-            "profile_url": "https://www.tiktok.com/@elonmusk"
-        },
-        {
-            "platform": "Pinterest",
-            "url": "https://www.pinterest.com/elonmusk/",
-            "exists": true,
-            "status_code": 200,
-            "profile_url": "https://www.pinterest.com/elonmusk/"
+            "profile_url": "https://www.instagram.com/elonmusk/"
         },
         {
             "platform": "Dev.to",
@@ -52,11 +38,11 @@
             "profile_url": "https://dev.to/elonmusk"
         },
         {
-            "platform": "Behance",
-            "url": "https://www.behance.net/elonmusk",
+            "platform": "TikTok",
+            "url": "https://www.tiktok.com/@elonmusk",
             "exists": true,
             "status_code": 200,
-            "profile_url": "https://www.behance.net/elonmusk"
+            "profile_url": "https://www.tiktok.com/@elonmusk"
         },
         {
             "platform": "GitLab",
@@ -66,6 +52,13 @@
             "profile_url": "https://gitlab.com/elonmusk"
         },
         {
+            "platform": "Pinterest",
+            "url": "https://www.pinterest.com/elonmusk/",
+            "exists": true,
+            "status_code": 200,
+            "profile_url": "https://www.pinterest.com/elonmusk/"
+        },
+        {
             "platform": "Bitbucket",
             "url": "https://bitbucket.org/elonmusk/",
             "exists": true,
@@ -73,11 +66,11 @@
             "profile_url": "https://bitbucket.org/elonmusk/"
         },
         {
-            "platform": "Spotify",
-            "url": "https://open.spotify.com/user/elonmusk",
+            "platform": "Behance",
+            "url": "https://www.behance.net/elonmusk",
             "exists": true,
             "status_code": 200,
-            "profile_url": "https://open.spotify.com/user/elonmusk"
+            "profile_url": "https://www.behance.net/elonmusk"
         },
         {
             "platform": "Vimeo",
@@ -85,6 +78,13 @@
             "exists": true,
             "status_code": 200,
             "profile_url": "https://vimeo.com/elonmusk"
+        },
+        {
+            "platform": "Spotify",
+            "url": "https://open.spotify.com/user/elonmusk",
+            "exists": true,
+            "status_code": 200,
+            "profile_url": "https://open.spotify.com/user/elonmusk"
         },
         {
             "platform": "Twitch",
@@ -101,13 +101,6 @@
             "profile_url": "https://www.wattpad.com/user/elonmusk"
         },
         {
-            "platform": "Steam",
-            "url": "https://steamcommunity.com/id/elonmusk",
-            "exists": true,
-            "status_code": 200,
-            "profile_url": "https://steamcommunity.com/id/elonmusk"
-        },
-        {
             "platform": "Keybase",
             "url": "https://keybase.io/elonmusk",
             "exists": true,
@@ -115,11 +108,11 @@
             "profile_url": "https://keybase.io/elonmusk"
         },
         {
-            "platform": "About.me",
-            "url": "https://about.me/elonmusk",
+            "platform": "Steam",
+            "url": "https://steamcommunity.com/id/elonmusk",
             "exists": true,
             "status_code": 200,
-            "profile_url": "https://about.me/elonmusk"
+            "profile_url": "https://steamcommunity.com/id/elonmusk"
         },
         {
             "platform": "Pastebin",
@@ -129,18 +122,11 @@
             "profile_url": "https://pastebin.com/u/elonmusk"
         },
         {
-            "platform": "Goodreads",
-            "url": "https://www.goodreads.com/elonmusk",
+            "platform": "About.me",
+            "url": "https://about.me/elonmusk",
             "exists": true,
             "status_code": 200,
-            "profile_url": "https://www.goodreads.com/elonmusk"
-        },
-        {
-            "platform": "Badoo",
-            "url": "https://badoo.com/profile/elonmusk",
-            "exists": true,
-            "status_code": 200,
-            "profile_url": "https://badoo.com/profile/elonmusk"
+            "profile_url": "https://about.me/elonmusk"
         },
         {
             "platform": "HackerNews",
@@ -150,11 +136,25 @@
             "profile_url": "https://news.ycombinator.com/user?id=elonmusk"
         },
         {
+            "platform": "Goodreads",
+            "url": "https://www.goodreads.com/elonmusk",
+            "exists": true,
+            "status_code": 200,
+            "profile_url": "https://www.goodreads.com/elonmusk"
+        },
+        {
             "platform": "SlideShare",
             "url": "https://www.slideshare.net/elonmusk",
             "exists": true,
             "status_code": 200,
             "profile_url": "https://www.slideshare.net/elonmusk"
+        },
+        {
+            "platform": "Blogger",
+            "url": "https://elonmusk.blogspot.com",
+            "exists": true,
+            "status_code": 200,
+            "profile_url": "https://elonmusk.blogspot.com"
         },
         {
             "platform": "Bandcamp",
@@ -164,11 +164,11 @@
             "profile_url": "https://elonmusk.bandcamp.com"
         },
         {
-            "platform": "Scribd",
-            "url": "https://www.scribd.com/elonmusk",
+            "platform": "Badoo",
+            "url": "https://badoo.com/profile/elonmusk",
             "exists": true,
             "status_code": 200,
-            "profile_url": "https://www.scribd.com/elonmusk"
+            "profile_url": "https://badoo.com/profile/elonmusk"
         },
         {
             "platform": "WordPress.com",
@@ -192,13 +192,6 @@
             "profile_url": "https://www.kaggle.com/elonmusk"
         },
         {
-            "platform": "Blogger",
-            "url": "https://elonmusk.blogspot.com",
-            "exists": true,
-            "status_code": 200,
-            "profile_url": "https://elonmusk.blogspot.com"
-        },
-        {
             "platform": "Telegram",
             "url": "https://t.me/elonmusk",
             "exists": true,
@@ -211,6 +204,13 @@
             "exists": true,
             "status_code": 200,
             "profile_url": "https://www.snapchat.com/add/elonmusk"
+        },
+        {
+            "platform": "Scribd",
+            "url": "https://www.scribd.com/elonmusk",
+            "exists": true,
+            "status_code": 200,
+            "profile_url": "https://www.scribd.com/elonmusk"
         },
         {
             "platform": "Roblox",
@@ -250,18 +250,18 @@
             "profile_url": "https://www.linkedin.com/in/elonmusk"
         },
         {
-            "platform": "Stack Overflow",
-            "url": "https://stackoverflow.com/users/elonmusk",
-            "exists": false,
-            "status_code": 404,
-            "profile_url": "https://stackoverflow.com/users/elonmusk"
-        },
-        {
             "platform": "CodePen",
             "url": "https://codepen.io/elonmusk",
             "exists": false,
             "status_code": 403,
             "profile_url": "https://codepen.io/elonmusk"
+        },
+        {
+            "platform": "Stack Overflow",
+            "url": "https://stackoverflow.com/users/elonmusk",
+            "exists": false,
+            "status_code": 404,
+            "profile_url": "https://stackoverflow.com/users/elonmusk"
         },
         {
             "platform": "Dribbble",
@@ -285,13 +285,6 @@
             "profile_url": "https://www.quora.com/profile/elonmusk"
         },
         {
-            "platform": "Flickr",
-            "url": "https://www.flickr.com/people/elonmusk",
-            "exists": false,
-            "status_code": 410,
-            "profile_url": "https://www.flickr.com/people/elonmusk"
-        },
-        {
             "platform": "ProductHunt",
             "url": "https://www.producthunt.com/@elonmusk",
             "exists": false,
@@ -304,6 +297,13 @@
             "exists": false,
             "status_code": 404,
             "profile_url": "https://en.gravatar.com/elonmusk"
+        },
+        {
+            "platform": "Flickr",
+            "url": "https://www.flickr.com/people/elonmusk",
+            "exists": false,
+            "status_code": 410,
+            "profile_url": "https://www.flickr.com/people/elonmusk"
         },
         {
             "platform": "MySpace",
@@ -327,18 +327,18 @@
             "profile_url": "https://launchpad.net/~elonmusk"
         },
         {
-            "platform": "VSCO",
-            "url": "https://vsco.co/elonmusk",
-            "exists": false,
-            "status_code": 403,
-            "profile_url": "https://vsco.co/elonmusk"
-        },
-        {
             "platform": "Newgrounds",
             "url": "https://elonmusk.newgrounds.com",
             "exists": false,
             "status_code": 403,
             "profile_url": "https://elonmusk.newgrounds.com"
+        },
+        {
+            "platform": "VSCO",
+            "url": "https://vsco.co/elonmusk",
+            "exists": false,
+            "status_code": 403,
+            "profile_url": "https://vsco.co/elonmusk"
         },
         {
             "platform": "TripAdvisor",

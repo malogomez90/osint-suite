@@ -1,0 +1,46 @@
+{
+    "file_path": "test_image.jpg",
+    "file_name": "test_image.jpg",
+    "has_exif": false,
+    "exif_data": {},
+    "gps_info": null,
+    "camera_info": {},
+    "timestamps": {},
+    "error": null,
+    "format": "JPEG",
+    "mode": "RGB",
+    "size": [
+        100,
+        100
+    ],
+    "width": 100,
+    "height": 100,
+    "image_info": {
+        "format": "JPEG",
+        "format_description": "JPEG (ISO 10918)",
+        "mode": "RGB",
+        "size": [
+            100,
+            100
+        ],
+        "width": 100,
+        "height": 100,
+        "info": {
+            "jfif": 257,
+            "jfif_version": [
+                1,
+                1
+            ],
+            "jfif_unit": 0,
+            "jfif_density": [
+                1,
+                1
+            ]
+        }
+    },
+    "privacy_analysis": {
+        "risks_found": [],
+        "risk_count": 0,
+        "recommendation": "Sin acciones necesarias"
+    }
+}
