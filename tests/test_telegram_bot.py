@@ -22,7 +22,12 @@ from osint_suite.telegram_bot import (
     run_file_job,
 )
 from osint_suite.telegram_services import run_username_lookup
-from osint_suite.telegram_services import CommandResult, format_summary
+from osint_suite.telegram_services import (
+    CommandResult,
+    format_summary,
+    run_document_lookup,
+    run_image_lookup,
+)
 
 
 class FakeMessage:
@@ -572,6 +577,84 @@ def test_photo_message_rejects_corrupt_payload_before_service_call(monkeypatch):
         {"chat_id": 100, "text": "Archivo corrupto o no coincide con el tipo esperado."}
     ]
     assert called["value"] is False
+
+
+def test_run_image_lookup_reports_gps_and_privacy_risk(monkeypatch):
+    class FakeExtractor:
+        def analyze_image(self, image_path):
+            return {
+                "file_name": "photo.jpg",
+                "format": "JPEG",
+                "width": 1200,
+                "height": 800,
+                "gps_info": {"latitude_decimal": 40.4, "longitude_decimal": -3.7},
+                "privacy_analysis": {"risk_count": 2},
+            }
+
+    monkeypatch.setattr("osint_suite.telegram_services.ImageMetadataExtractor", FakeExtractor)
+
+    result = run_image_lookup("dummy.jpg", "photo.jpg")
+
+    assert "GPS: si" in result.summary
+    assert "Riesgos privacidad: 2" in result.summary
+    assert result.filename_prefix == "image_photo"
+
+
+def test_run_image_lookup_reports_no_exif_or_gps(monkeypatch):
+    class FakeExtractor:
+        def analyze_image(self, image_path):
+            return {
+                "file_name": "plain.jpg",
+                "format": "JPEG",
+                "width": 640,
+                "height": 480,
+                "gps_info": None,
+                "privacy_analysis": {"risk_count": 0},
+            }
+
+    monkeypatch.setattr("osint_suite.telegram_services.ImageMetadataExtractor", FakeExtractor)
+
+    result = run_image_lookup("dummy.jpg", "plain.jpg")
+
+    assert "GPS: no" in result.summary
+    assert "Riesgos privacidad: 0" in result.summary
+
+
+def test_run_document_lookup_reports_partial_non_fatal_error(monkeypatch):
+    class FakeAnalyzer:
+        supported_formats = {".pdf": "PDF"}
+
+        def analyze_document(self, file_path):
+            return {
+                "file_name": "report.pdf",
+                "file_type": "PDF",
+                "file_stats": {"size_bytes": 2048, "modified": "2026-04-01T10:00:00"},
+                "error": "Metadatos XMP no disponibles",
+            }
+
+    monkeypatch.setattr("osint_suite.telegram_services.DocumentAnalyzer", FakeAnalyzer)
+
+    result = run_document_lookup("dummy.pdf", "report.pdf")
+
+    assert "Tipo: PDF" in result.summary
+    assert "Error: Metadatos XMP no disponibles" in result.summary
+    assert result.filename_prefix == "document_report"
+
+
+def test_send_command_result_attaches_json_for_large_file_analysis_payload():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=40)
+    context = FakeContext(config)
+    result = CommandResult(
+        summary="Analisis de imagen\n- GPS: si",
+        payload={"metadata": "x" * 200, "kind": "image"},
+        filename_prefix="image_photo",
+    )
+
+    asyncio.run(send_command_result(context, 100, result))
+
+    assert context.bot.messages == [{"chat_id": 100, "text": "Analisis de imagen\n- GPS: si"}]
+    assert len(context.bot.documents) == 1
+    assert context.bot.documents[0]["document"].filename == "image_photo.json"
 
 
 def test_run_file_job_replies_when_analysis_times_out(monkeypatch):
