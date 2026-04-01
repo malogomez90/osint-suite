@@ -1,10 +1,68 @@
 import os
+import asyncio
+from types import SimpleNamespace
 
 import pytest
 
 
-from osint_suite.telegram_bot import TelegramBotConfig, InMemoryRateLimiter
+from osint_suite.telegram_bot import (
+    HELP_TEXT,
+    TelegramBotConfig,
+    InMemoryRateLimiter,
+    start_command,
+    help_command,
+    username_command,
+    send_command_result,
+    run_command_job,
+)
 from osint_suite.telegram_services import run_username_lookup
+from osint_suite.telegram_services import CommandResult
+
+
+class FakeMessage:
+    def __init__(self, chat_id=100):
+        self.chat_id = chat_id
+        self.replies = []
+
+    async def reply_text(self, text):
+        self.replies.append(text)
+
+
+class FakeBot:
+    def __init__(self):
+        self.messages = []
+        self.documents = []
+        self.actions = []
+
+    async def send_message(self, chat_id, text):
+        self.messages.append({"chat_id": chat_id, "text": text})
+
+    async def send_document(self, chat_id, document, caption=None):
+        self.documents.append({"chat_id": chat_id, "document": document, "caption": caption})
+
+    async def send_chat_action(self, chat_id, action):
+        self.actions.append({"chat_id": chat_id, "action": action})
+
+
+class FakeContext:
+    def __init__(self, config, rate_limiter=None, args=None):
+        self.args = args or []
+        self.bot = FakeBot()
+        self.application = SimpleNamespace(
+            bot_data={
+                "config": config,
+                "rate_limiter": rate_limiter or InMemoryRateLimiter(5, 20, 1),
+            }
+        )
+        self.chat_data = {}
+
+
+def make_update(user_id=42, chat_id=100):
+    message = FakeMessage(chat_id=chat_id)
+    return SimpleNamespace(
+        effective_user=SimpleNamespace(id=user_id),
+        effective_message=message,
+    )
 
 
 def test_telegram_config_reads_token_and_limits_from_env(monkeypatch):
@@ -72,3 +130,91 @@ def test_username_service_returns_summary_and_payload(monkeypatch):
     assert "GitHub" in result.summary
     assert result.payload["username"] == "testuser"
     assert result.filename_prefix == "username_testuser"
+
+
+def test_start_command_replies_with_bot_summary():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config)
+
+    asyncio.run(start_command(update, context))
+
+    assert "OSINT Suite Bot activo." in update.effective_message.replies[0]
+
+
+def test_help_command_replies_with_help_text():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config)
+
+    asyncio.run(help_command(update, context))
+
+    assert update.effective_message.replies == [HELP_TEXT]
+
+
+def test_username_command_requires_argument():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+
+    asyncio.run(username_command(update, context))
+
+    assert update.effective_message.replies == ["Uso: /username <valor>"]
+
+
+def test_username_command_replies_when_rate_limited():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    limiter = InMemoryRateLimiter(1, 10, 1)
+    limiter.allow_request(user_id=42)
+    update = make_update()
+    context = FakeContext(config, rate_limiter=limiter, args=["john"])
+
+    asyncio.run(username_command(update, context))
+
+    assert update.effective_message.replies == ["Limite de uso excedido. Espera un momento antes de reintentar."]
+
+
+def test_username_command_replies_when_job_slot_is_busy():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    limiter = InMemoryRateLimiter(5, 10, 1)
+    limiter.try_acquire_job_slot(user_id=42)
+    update = make_update()
+    context = FakeContext(config, rate_limiter=limiter, args=["john"])
+
+    asyncio.run(username_command(update, context))
+
+    assert update.effective_message.replies == [
+        "Ya tienes una tarea en curso. Espera a que termine antes de lanzar otra."
+    ]
+
+
+def test_send_command_result_attaches_json_when_payload_is_large():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=20)
+    context = FakeContext(config)
+    result = CommandResult(
+        summary="Resumen corto",
+        payload={"data": "x" * 100},
+        filename_prefix="username_john",
+    )
+
+    asyncio.run(send_command_result(context, 100, result))
+
+    assert context.bot.messages == [{"chat_id": 100, "text": "Resumen corto"}]
+    assert len(context.bot.documents) == 1
+    assert context.bot.documents[0]["caption"] == "Resultado completo en JSON."
+
+
+def test_run_command_job_returns_sanitized_internal_error(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    context = FakeContext(config)
+
+    def fail_call_service(service_name, raw_argument):
+        raise RuntimeError("sensitive backend trace")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_service", fail_call_service)
+
+    asyncio.run(run_command_job(context, chat_id=100, user_id=42, service_name="username", raw_argument="john", long_job_threshold_seconds=1))
+
+    assert context.bot.messages == [
+        {"chat_id": 100, "text": "Se produjo un error interno al procesar la solicitud."}
+    ]
