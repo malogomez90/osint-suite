@@ -13,16 +13,23 @@ import io
 import json
 import logging
 import os
+import tempfile
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 from telegram import InputFile, Update
 from telegram.constants import ChatAction
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from .telegram_services import CommandResult, dispatch_service
+from .telegram_services import (
+    CommandResult,
+    dispatch_file_service,
+    dispatch_service,
+    is_supported_document,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -108,6 +115,8 @@ HELP_TEXT = (
     "/company <nombre>\n"
     "/geo <lat, lon>\n"
     "\n"
+    "Tambien puedes enviar un PDF/documento Office o una imagen para analizar metadatos.\n"
+    "\n"
     "Uso publico con rate limiting por usuario."
 )
 
@@ -129,6 +138,8 @@ def create_application(config: TelegramBotConfig) -> Application:
     application.add_handler(CommandHandler("phone", phone_command))
     application.add_handler(CommandHandler("company", company_command))
     application.add_handler(CommandHandler("geo", geo_command))
+    application.add_handler(MessageHandler(filters.Document.ALL, document_message))
+    application.add_handler(MessageHandler(filters.PHOTO, photo_message))
     return application
 
 
@@ -166,6 +177,42 @@ async def company_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def geo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await execute_service_command(update, context, "geo", "Uso: /geo <lat, lon>")
+
+
+async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    document = getattr(message, "document", None)
+    if document is None:
+        await message.reply_text("No se recibio ningun documento.")
+        return
+    file_name = getattr(document, "file_name", "") or "document.bin"
+    if not is_supported_document(file_name):
+        await message.reply_text("Formato de documento no soportado. Envia PDF u Office/OpenDocument.")
+        return
+    await execute_file_command(
+        update=update,
+        context=context,
+        service_name="document",
+        file_id=document.file_id,
+        original_name=file_name,
+        processing_text="Procesando documento...",
+    )
+
+
+async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    photos = list(getattr(message, "photo", []) or [])
+    if not photos:
+        await message.reply_text("No se recibio ninguna imagen.")
+        return
+    await execute_file_command(
+        update=update,
+        context=context,
+        service_name="image",
+        file_id=photos[-1].file_id,
+        original_name="telegram_photo.jpg",
+        processing_text="Procesando imagen...",
+    )
 
 
 async def execute_service_command(
@@ -210,6 +257,46 @@ async def execute_service_command(
     task.add_done_callback(lambda finished: context.chat_data["background_tasks"].discard(finished))
 
 
+async def execute_file_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    service_name: str,
+    file_id: str,
+    original_name: str,
+    processing_text: str,
+) -> None:
+    if not await ensure_user_allowed(update, context):
+        return
+
+    message = update.effective_message
+    user_id = update.effective_user.id if update.effective_user else 0
+    config: TelegramBotConfig = context.application.bot_data["config"]
+    limiter: InMemoryRateLimiter = context.application.bot_data["rate_limiter"]
+
+    if not limiter.allow_request(user_id):
+        await message.reply_text("Limite de uso excedido. Espera un momento antes de reintentar.")
+        return
+
+    if not limiter.try_acquire_job_slot(user_id):
+        await message.reply_text("Ya tienes una tarea en curso. Espera a que termine antes de lanzar otra.")
+        return
+
+    await message.reply_text(processing_text)
+    task = asyncio.create_task(
+        run_file_job(
+            context=context,
+            chat_id=message.chat_id,
+            user_id=user_id,
+            service_name=service_name,
+            file_id=file_id,
+            original_name=original_name,
+            long_job_threshold_seconds=config.long_job_threshold_seconds,
+        )
+    )
+    context.chat_data.setdefault("background_tasks", set()).add(task)
+    task.add_done_callback(lambda finished: context.chat_data["background_tasks"].discard(finished))
+
+
 async def run_command_job(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -241,6 +328,62 @@ async def run_command_job(
 
 def call_service(service_name: str, raw_arguments: list[str]) -> CommandResult:
     return dispatch_service(service_name, raw_arguments)
+
+
+def call_file_service(service_name: str, file_path: str, original_name: str) -> CommandResult:
+    return dispatch_file_service(service_name, file_path, original_name)
+
+
+async def download_file_to_temp_path(
+    context: ContextTypes.DEFAULT_TYPE,
+    file_id: str,
+    original_name: str,
+) -> str:
+    suffix = Path(original_name).suffix or ".bin"
+    fd, temp_path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    try:
+        telegram_file = await context.bot.get_file(file_id)
+        await telegram_file.download_to_drive(custom_path=temp_path)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+    return temp_path
+
+
+async def run_file_job(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    user_id: int,
+    service_name: str,
+    file_id: str,
+    original_name: str,
+    long_job_threshold_seconds: int,
+) -> None:
+    limiter: InMemoryRateLimiter = context.application.bot_data["rate_limiter"]
+    temp_path = ""
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_DOCUMENT)
+        temp_path = await download_file_to_temp_path(context, file_id, original_name)
+        start = time.perf_counter()
+        result = await asyncio.to_thread(call_file_service, service_name, temp_path, original_name)
+        elapsed = time.perf_counter() - start
+        if elapsed >= long_job_threshold_seconds:
+            logger.info("Long Telegram file job completed", extra={"service": service_name, "user_id": user_id})
+        await send_command_result(context, chat_id, result)
+    except ValueError as exc:
+        await context.bot.send_message(chat_id=chat_id, text=str(exc))
+    except Exception:
+        logger.exception("Telegram file command failed", extra={"service": service_name, "user_id": user_id})
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Se produjo un error interno al procesar la solicitud.",
+        )
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+        limiter.release_job_slot(user_id)
 
 
 async def send_command_result(

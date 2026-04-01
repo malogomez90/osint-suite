@@ -10,9 +10,12 @@ from osint_suite.telegram_bot import (
     TelegramBotConfig,
     InMemoryRateLimiter,
     call_service,
+    call_file_service,
     start_command,
     help_command,
     username_command,
+    document_message,
+    photo_message,
     send_command_result,
     run_command_job,
 )
@@ -21,12 +24,23 @@ from osint_suite.telegram_services import CommandResult
 
 
 class FakeMessage:
-    def __init__(self, chat_id=100):
+    def __init__(self, chat_id=100, document=None, photo=None):
         self.chat_id = chat_id
+        self.document = document
+        self.photo = photo or []
         self.replies = []
 
     async def reply_text(self, text):
         self.replies.append(text)
+
+
+class FakeTelegramFile:
+    def __init__(self, payload=b"sample"):
+        self.payload = payload
+
+    async def download_to_drive(self, custom_path):
+        with open(custom_path, "wb") as handle:
+            handle.write(self.payload)
 
 
 class FakeBot:
@@ -34,6 +48,7 @@ class FakeBot:
         self.messages = []
         self.documents = []
         self.actions = []
+        self.files = {}
 
     async def send_message(self, chat_id, text):
         self.messages.append({"chat_id": chat_id, "text": text})
@@ -43,6 +58,9 @@ class FakeBot:
 
     async def send_chat_action(self, chat_id, action):
         self.actions.append({"chat_id": chat_id, "action": action})
+
+    async def get_file(self, file_id):
+        return self.files[file_id]
 
 
 class FakeContext:
@@ -56,6 +74,17 @@ class FakeContext:
             }
         )
         self.chat_data = {}
+
+
+async def drain_background_tasks(context):
+    tasks = list(context.chat_data.get("background_tasks", set()))
+    if tasks:
+        await asyncio.gather(*tasks)
+
+
+async def run_handler_and_background(handler, update, context):
+    await handler(update, context)
+    await drain_background_tasks(context)
 
 
 def make_update(user_id=42, chat_id=100):
@@ -260,3 +289,99 @@ def test_call_service_parses_company_country_option(monkeypatch):
 
     assert result.summary == "ok"
     assert captured == {"company_name": "Acme Labs", "country_code": "ES"}
+
+
+def test_document_message_downloads_temp_file_and_cleans_it(monkeypatch, tmp_path):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        effective_message=FakeMessage(
+            chat_id=100,
+            document=SimpleNamespace(file_id="doc-1", file_name="report.pdf"),
+        ),
+    )
+    context = FakeContext(config)
+    context.bot.files["doc-1"] = FakeTelegramFile(payload=b"%PDF-1.4")
+    captured = {}
+
+    def fake_file_service(service_name, file_path, original_name):
+        captured["service_name"] = service_name
+        captured["original_name"] = original_name
+        captured["file_path"] = file_path
+        captured["exists_during_call"] = os.path.exists(file_path)
+        with open(file_path, "rb") as handle:
+            captured["payload"] = handle.read()
+        return CommandResult(
+            summary="Documento analizado",
+            payload={"status": "ok"},
+            filename_prefix="document_report",
+        )
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_file_service", fake_file_service)
+
+    asyncio.run(run_handler_and_background(document_message, update, context))
+
+    assert update.effective_message.replies == ["Procesando documento..."]
+    assert context.bot.messages == [{"chat_id": 100, "text": "Documento analizado"}]
+    assert captured["service_name"] == "document"
+    assert captured["original_name"] == "report.pdf"
+    assert captured["exists_during_call"] is True
+    assert captured["payload"] == b"%PDF-1.4"
+    assert os.path.exists(captured["file_path"]) is False
+
+
+def test_document_message_rejects_unsupported_extension():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        effective_message=FakeMessage(
+            chat_id=100,
+            document=SimpleNamespace(file_id="doc-1", file_name="payload.exe"),
+        ),
+    )
+    context = FakeContext(config)
+
+    asyncio.run(document_message(update, context))
+
+    assert update.effective_message.replies == [
+        "Formato de documento no soportado. Envia PDF u Office/OpenDocument."
+    ]
+    assert context.bot.messages == []
+
+
+def test_photo_message_downloads_largest_variant(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        effective_message=FakeMessage(
+            chat_id=100,
+            photo=[
+                SimpleNamespace(file_id="photo-small"),
+                SimpleNamespace(file_id="photo-large"),
+            ],
+        ),
+    )
+    context = FakeContext(config)
+    context.bot.files["photo-large"] = FakeTelegramFile(payload=b"\x89PNG\r\n")
+    captured = {}
+
+    def fake_file_service(service_name, file_path, original_name):
+        captured["service_name"] = service_name
+        captured["original_name"] = original_name
+        with open(file_path, "rb") as handle:
+            captured["payload"] = handle.read()
+        return CommandResult(
+            summary="Imagen analizada",
+            payload={"status": "ok"},
+            filename_prefix="image_photo",
+        )
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_file_service", fake_file_service)
+
+    asyncio.run(run_handler_and_background(photo_message, update, context))
+
+    assert update.effective_message.replies == ["Procesando imagen..."]
+    assert context.bot.messages == [{"chat_id": 100, "text": "Imagen analizada"}]
+    assert captured["service_name"] == "image"
+    assert captured["original_name"] == "telegram_photo.jpg"
+    assert captured["payload"] == b"\x89PNG\r\n"

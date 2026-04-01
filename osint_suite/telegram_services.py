@@ -7,12 +7,17 @@ las herramientas existentes del paquete.
 
 from __future__ import annotations
 
+import contextlib
+import io
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Sequence
 
 from .company_research import CompanyResearcher
+from .document_analyzer import DocumentAnalyzer
 from .email_osint import EmailOSINT
 from .geolocation_helper import GeolocationHelper
+from .image_metadata import ImageMetadataExtractor
 from .phone_investigator import PhoneInvestigator
 from .username_search import UsernameSearcher
 
@@ -22,6 +27,10 @@ class CommandResult:
     summary: str
     payload: Dict[str, Any]
     filename_prefix: str
+
+
+DOCUMENT_FORMATS = tuple(sorted(DocumentAnalyzer().supported_formats.keys()))
+IMAGE_FORMATS = tuple(sorted(ImageMetadataExtractor().supported_formats))
 
 
 def format_summary(title: str, fields: Sequence[tuple[str, Any]]) -> str:
@@ -123,12 +132,71 @@ def run_geo_lookup(coords_input: str) -> CommandResult:
     return CommandResult(summary=summary, payload=results, filename_prefix=filename)
 
 
+def is_supported_document(filename: str) -> bool:
+    return Path(filename).suffix.lower() in DOCUMENT_FORMATS
+
+
+def is_supported_image(filename: str) -> bool:
+    return Path(filename).suffix.lower() in IMAGE_FORMATS
+
+
+def run_document_lookup(file_path: str, original_name: str) -> CommandResult:
+    if not is_supported_document(original_name):
+        raise ValueError("Formato de documento no soportado. Envia PDF u Office/OpenDocument.")
+
+    analyzer = DocumentAnalyzer()
+    with contextlib.redirect_stdout(io.StringIO()):
+        results = analyzer.analyze_document(file_path)
+
+    file_type = results.get("file_type") or Path(original_name).suffix.lower().lstrip(".").upper()
+    file_stats = results.get("file_stats") or {}
+    summary = format_summary(
+        f"Analisis de documento {original_name}",
+        [
+            ("Tipo", file_type or "desconocido"),
+            ("Tamano bytes", file_stats.get("size_bytes") or "N/A"),
+            ("Modificado", file_stats.get("modified") or "N/A"),
+            ("Error", results.get("error") or "sin errores"),
+        ],
+    )
+    safe_name = Path(original_name).stem.replace(" ", "_") or "document"
+    return CommandResult(summary=summary, payload=results, filename_prefix=f"document_{safe_name}")
+
+
+def run_image_lookup(file_path: str, original_name: str) -> CommandResult:
+    if not is_supported_image(original_name):
+        raise ValueError("Formato de imagen no soportado.")
+
+    extractor = ImageMetadataExtractor()
+    with contextlib.redirect_stdout(io.StringIO()):
+        results = extractor.analyze_image(file_path)
+
+    gps_info = results.get("gps_info") or {}
+    privacy = results.get("privacy_analysis") or {}
+    summary = format_summary(
+        f"Analisis de imagen {original_name}",
+        [
+            ("Formato", results.get("format") or results.get("file_type") or "desconocido"),
+            ("Dimensiones", f"{results.get('width', '?')}x{results.get('height', '?')}"),
+            ("GPS", "si" if gps_info else "no"),
+            ("Riesgos privacidad", privacy.get("risk_count", 0)),
+        ],
+    )
+    safe_name = Path(original_name).stem.replace(" ", "_") or "image"
+    return CommandResult(summary=summary, payload=results, filename_prefix=f"image_{safe_name}")
+
+
 SERVICE_HANDLERS: Dict[str, Callable[..., CommandResult]] = {
     "username": run_username_lookup,
     "email": run_email_lookup,
     "phone": run_phone_lookup,
     "company": run_company_lookup,
     "geo": run_geo_lookup,
+}
+
+FILE_HANDLERS: Dict[str, Callable[[str, str], CommandResult]] = {
+    "document": run_document_lookup,
+    "image": run_image_lookup,
 }
 
 
@@ -141,6 +209,14 @@ def dispatch_service(service_name: str, args: Sequence[str]) -> CommandResult:
     if service_name in {"username", "email", "geo"}:
         return SERVICE_HANDLERS[service_name](" ".join(normalized_args).strip())
     raise ValueError(f"Unsupported service: {service_name}")
+
+
+def dispatch_file_service(service_name: str, file_path: str, original_name: str) -> CommandResult:
+    try:
+        handler = FILE_HANDLERS[service_name]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported file service: {service_name}") from exc
+    return handler(file_path, original_name)
 
 
 def dispatch_phone_service(args: Sequence[str]) -> CommandResult:
