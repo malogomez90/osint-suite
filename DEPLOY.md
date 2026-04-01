@@ -30,6 +30,9 @@ source venv/bin/activate
 # 3. Instalar dependencias
 pip install -r requirements.txt
 
+# 3b. Dependencias de desarrollo opcionales
+pip install -r requirements-dev.txt
+
 # 4. Verificar instalación
 python -m osint_suite.main --help
 ```
@@ -144,7 +147,7 @@ sudo systemctl status osint-suite
 
 ## 📦 Dependencias
 
-Las dependencias se instalan automáticamente con `requirements.txt`:
+Las dependencias de runtime se instalan automáticamente con `requirements.txt`:
 
 | Paquete | Versión | Propósito |
 |---------|---------|-----------|
@@ -159,6 +162,14 @@ Las dependencias se instalan automáticamente con `requirements.txt`:
 | olefile | >=0.46 | Análisis de archivos OLE |
 | phonenumbers | >=8.13.0 | Validación de teléfonos |
 | python-dateutil | >=2.8.2 | Manipulación de fechas |
+
+Dependencias de desarrollo opcionales en `requirements-dev.txt`:
+
+| Paquete | Versión | Propósito |
+|---------|---------|-----------|
+| pytest | >=7.0.0 | Tests automáticos |
+| black | >=22.0.0 | Formateo de código |
+| flake8 | >=4.0.0 | Linting |
 
 ## 🔧 Configuración
 
@@ -240,6 +251,44 @@ pip install flask
 python api.py
 ```
 
+## Telegram Bot (MVP público)
+
+El frontend actual del proyecto es Telegram, no una SPA. El bot se ejecuta como un proceso Python separado y delega en `osint_suite` para el trabajo OSINT.
+
+Configuración mínima por entorno:
+
+```bash
+export TELEGRAM_BOT_TOKEN="tu_token"
+export TELEGRAM_RATE_LIMIT_PER_MINUTE=5
+export TELEGRAM_RATE_LIMIT_PER_HOUR=20
+export TELEGRAM_LONG_JOB_THRESHOLD_SECONDS=5
+```
+
+Arranque local:
+
+```bash
+python -m osint_suite.telegram_bot
+```
+
+Verificación manual mínima:
+
+```bash
+# Validar configuración sin arrancar polling
+python -m osint_suite.telegram_bot --check-config
+
+# Después, arrancar el bot y probar en Telegram:
+# /start
+# /help
+# /username johndoe
+# /email usuario@ejemplo.com
+```
+
+Notas operativas:
+
+- El token solo debe ir en variables de entorno.
+- El bot aplica rate limiting por `user_id`.
+- Los resultados grandes se envían como JSON adjunto en el chat.
+
 ## 📊 Monitoreo
 
 ### Logs
@@ -312,7 +361,8 @@ Para uso intensivo, considerar:
 
 - [ ] Python 3.8+ instalado
 - [ ] Entorno virtual creado
-- [ ] Dependencias instaladas (`pip install -r requirements.txt`)
+- [ ] Dependencias de runtime instaladas (`pip install -r requirements.txt`)
+- [ ] Dependencias de desarrollo instaladas si aplica (`pip install -r requirements-dev.txt`)
 - [ ] Herramientas importables (`python -c "from osint_suite import *"`)
 - [ ] Menú principal funciona (`python -m osint_suite.main --menu`)
 - [ ] Tests de verificación pasan

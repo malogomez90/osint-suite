@@ -1,10 +1,12 @@
 import pytest
+from packaging.requirements import Requirement
 
 from tests.conftest import install_package, run_command, run_python_code, temporary_venv
 
 
 CLI_MODULES = [
     "osint_suite.main",
+    "osint_suite.telegram_bot",
     "osint_suite.username_search",
     "osint_suite.email_osint",
     "osint_suite.phone_investigator",
@@ -26,10 +28,15 @@ OPERATIONAL_DOCS = [
 
 def load_runtime_requirements(repo_root):
     return {
-        line.strip().lower()
+        normalize_requirement(line.strip())
         for line in (repo_root / "requirements.txt").read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     }
+
+
+def normalize_requirement(requirement_string):
+    requirement = Requirement(requirement_string)
+    return f"{requirement.name.lower()}{requirement.specifier}"
 
 
 def test_setup_py_name_command_succeeds(repo_root):
@@ -198,7 +205,7 @@ print("\\n".join(requirements))
         assert result.returncode == 0, result.stderr
 
         installed_requirements = {
-            line.strip()
+            normalize_requirement(line.strip())
             for line in result.stdout.splitlines()
             if line.strip()
         }
