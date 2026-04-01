@@ -185,6 +185,10 @@ OSINT_SUITE_LOG_LEVEL=INFO
 # APIs externas (opcional)
 HIBP_API_KEY=tu_api_key_aqui
 EMAILREP_API_KEY=tu_api_key_aqui
+
+# Telegram bot
+TELEGRAM_BOT_TOKEN=tu_bot_token
+TELEGRAM_MAX_UPLOAD_SIZE_BYTES=10485760
 ```
 
 ### Configuración por Herramienta

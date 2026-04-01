@@ -100,6 +100,7 @@ def test_telegram_config_reads_token_and_limits_from_env(monkeypatch):
     monkeypatch.setenv("TELEGRAM_RATE_LIMIT_PER_MINUTE", "7")
     monkeypatch.setenv("TELEGRAM_RATE_LIMIT_PER_HOUR", "33")
     monkeypatch.setenv("TELEGRAM_LONG_JOB_THRESHOLD_SECONDS", "9")
+    monkeypatch.setenv("TELEGRAM_MAX_UPLOAD_SIZE_BYTES", "2048")
 
     config = TelegramBotConfig.from_env()
 
@@ -107,6 +108,7 @@ def test_telegram_config_reads_token_and_limits_from_env(monkeypatch):
     assert config.rate_limit_per_minute == 7
     assert config.rate_limit_per_hour == 33
     assert config.long_job_threshold_seconds == 9
+    assert config.max_upload_size_bytes == 2048
 
 
 def test_telegram_config_requires_token(monkeypatch):
@@ -349,6 +351,25 @@ def test_document_message_rejects_unsupported_extension():
     assert context.bot.messages == []
 
 
+def test_document_message_rejects_oversized_upload_before_background_job():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), max_upload_size_bytes=100)
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        effective_message=FakeMessage(
+            chat_id=100,
+            document=SimpleNamespace(file_id="doc-1", file_name="report.pdf", file_size=101),
+        ),
+    )
+    context = FakeContext(config)
+
+    asyncio.run(document_message(update, context))
+
+    assert update.effective_message.replies == [
+        "Archivo demasiado grande. Limite actual: 100 bytes."
+    ]
+    assert context.chat_data == {}
+
+
 def test_photo_message_downloads_largest_variant(monkeypatch):
     config = TelegramBotConfig(bot_token="token", allowed_users=set())
     update = SimpleNamespace(
@@ -385,3 +406,25 @@ def test_photo_message_downloads_largest_variant(monkeypatch):
     assert captured["service_name"] == "image"
     assert captured["original_name"] == "telegram_photo.jpg"
     assert captured["payload"] == b"\x89PNG\r\n"
+
+
+def test_photo_message_rejects_oversized_upload_before_background_job():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), max_upload_size_bytes=50)
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        effective_message=FakeMessage(
+            chat_id=100,
+            photo=[
+                SimpleNamespace(file_id="photo-small", file_size=20),
+                SimpleNamespace(file_id="photo-large", file_size=51),
+            ],
+        ),
+    )
+    context = FakeContext(config)
+
+    asyncio.run(photo_message(update, context))
+
+    assert update.effective_message.replies == [
+        "Archivo demasiado grande. Limite actual: 50 bytes."
+    ]
+    assert context.chat_data == {}

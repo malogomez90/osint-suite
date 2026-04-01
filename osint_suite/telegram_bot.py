@@ -44,6 +44,7 @@ class TelegramBotConfig:
     long_job_threshold_seconds: int = 5
     max_concurrent_jobs: int = 1
     result_file_threshold_bytes: int = 2500
+    max_upload_size_bytes: int = 10 * 1024 * 1024
 
     @classmethod
     def from_env(cls) -> "TelegramBotConfig":
@@ -65,6 +66,7 @@ class TelegramBotConfig:
             long_job_threshold_seconds=int(os.environ.get("TELEGRAM_LONG_JOB_THRESHOLD_SECONDS", "5")),
             max_concurrent_jobs=int(os.environ.get("TELEGRAM_MAX_CONCURRENT_JOBS", "1")),
             result_file_threshold_bytes=int(os.environ.get("TELEGRAM_RESULT_FILE_THRESHOLD_BYTES", "2500")),
+            max_upload_size_bytes=int(os.environ.get("TELEGRAM_MAX_UPLOAD_SIZE_BYTES", str(10 * 1024 * 1024))),
         )
 
 
@@ -189,6 +191,10 @@ async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not is_supported_document(file_name):
         await message.reply_text("Formato de documento no soportado. Envia PDF u Office/OpenDocument.")
         return
+    config: TelegramBotConfig = context.application.bot_data["config"]
+    if is_file_too_large(getattr(document, "file_size", None), config.max_upload_size_bytes):
+        await message.reply_text(f"Archivo demasiado grande. Limite actual: {config.max_upload_size_bytes} bytes.")
+        return
     await execute_file_command(
         update=update,
         context=context,
@@ -205,14 +211,23 @@ async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not photos:
         await message.reply_text("No se recibio ninguna imagen.")
         return
+    config: TelegramBotConfig = context.application.bot_data["config"]
+    largest_photo = photos[-1]
+    if is_file_too_large(getattr(largest_photo, "file_size", None), config.max_upload_size_bytes):
+        await message.reply_text(f"Archivo demasiado grande. Limite actual: {config.max_upload_size_bytes} bytes.")
+        return
     await execute_file_command(
         update=update,
         context=context,
         service_name="image",
-        file_id=photos[-1].file_id,
+        file_id=largest_photo.file_id,
         original_name="telegram_photo.jpg",
         processing_text="Procesando imagen...",
     )
+
+
+def is_file_too_large(file_size: int | None, max_upload_size_bytes: int) -> bool:
+    return file_size is not None and file_size > max_upload_size_bytes
 
 
 async def execute_service_command(
