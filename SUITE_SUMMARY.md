@@ -109,7 +109,7 @@ Se ha creado una suite completa de **10 herramientas OSINT en Python**, excluyen
 | `utils.py` | Utilidades comunes (colores, validaciones, exportación) |
 | `requirements.txt` | Dependencias (sin herramientas de red) |
 | `setup.py` | Script de instalación con entry points |
-| `README_OSINT_SUITE.md` | Documentación completa |
+| `README.md` | Documentación completa |
 | `SUITE_SUMMARY.md` | Este resumen |
 
 ---

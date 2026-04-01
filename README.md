@@ -42,6 +42,9 @@ source venv/bin/activate
 
 # Instalar dependencias
 pip install -r requirements.txt
+
+# Dependencias de desarrollo opcionales
+pip install -r requirements-dev.txt
 ```
 
 ## 🚀 Uso Rápido
@@ -122,7 +125,8 @@ awesome-osint/
 │   ├── breach_checker.py    # Verificador de filtraciones
 │   └── company_research.py  # Investigación de empresas
 ├── requirements.txt
-└── README_OSINT_SUITE.md
+├── requirements-dev.txt
+└── README.md
 ```
 
 ## ⚠️ Exclusiones (Temas de Red)
@@ -153,6 +157,8 @@ Las contribuciones son bienvenidas. Por favor:
 2. Incluye manejo de errores apropiado
 3. Documenta nuevas funcionalidades
 4. Respeta el rate limiting de servicios externos
+
+La carpeta `codex/` gobierna el comportamiento del agente en este repo. Algunos `codex/*.md` actúan como contrato verificado por `tests/test_setup.py`, así que si cambias frases obligatorias o estructura mínima en esos archivos debes actualizar también los tests correspondientes.
 
 ## 📧 Contacto
 

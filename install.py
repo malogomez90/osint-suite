@@ -9,6 +9,8 @@ import subprocess
 import platform
 from pathlib import Path
 
+INSTALL_DEV_DEPENDENCIES = "--dev" in sys.argv
+
 
 def print_banner():
     """Imprime banner de instalación"""
@@ -71,7 +73,7 @@ def get_venv_pip():
 
 
 def install_dependencies():
-    """Instala dependencias"""
+    """Instala dependencias de runtime"""
     print("\n[*] Instalando dependencias...")
     pip = get_venv_pip()
     
@@ -79,12 +81,26 @@ def install_dependencies():
         # Actualizar pip primero
         subprocess.run([pip, "install", "--upgrade", "pip"], check=True)
         
-        # Instalar dependencias
+        # Instalar dependencias de runtime
         subprocess.run([pip, "install", "-r", "requirements.txt"], check=True)
         print("[✓] Dependencias instaladas")
         return True
     except subprocess.CalledProcessError as e:
         print(f"[✗] Error al instalar dependencias: {e}")
+        return False
+
+
+def install_dev_dependencies():
+    """Instala dependencias opcionales de desarrollo"""
+    print("\n[*] Instalando dependencias de desarrollo...")
+    pip = get_venv_pip()
+
+    try:
+        subprocess.run([pip, "install", "-r", "requirements-dev.txt"], check=True)
+        print("[✓] Dependencias de desarrollo instaladas")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[✗] Error al instalar dependencias de desarrollo: {e}")
         return False
 
 
@@ -176,6 +192,9 @@ def print_summary():
 ✓ Paquete osint-suite instalado
 ✓ Todas las herramientas verificadas
 
+DEPENDENCIAS OPCIONALES:
+  Usa `python install.py --dev` para instalar `requirements-dev.txt`.
+
 USO:
   Windows:   venv\\Scripts\\python -m osint_suite.main --menu
   Linux/Mac: venv/bin/python -m osint_suite.main --menu
@@ -220,6 +239,10 @@ def main():
     # Instalar dependencias
     if not install_dependencies():
         print("\n[✗] Instalación fallida: No se pudieron instalar dependencias")
+        sys.exit(1)
+
+    if INSTALL_DEV_DEPENDENCIES and not install_dev_dependencies():
+        print("\n[✗] Instalación fallida: No se pudieron instalar dependencias de desarrollo")
         sys.exit(1)
     
     # Instalar paquete
