@@ -255,14 +255,30 @@ python api.py
 
 El frontend actual del proyecto es Telegram, no una SPA. El bot se ejecuta como un proceso Python separado y delega en `osint_suite` para el trabajo OSINT.
 
-Configuración mínima por entorno:
+Variables de entorno del bot:
 
 ```bash
+# Obligatoria
 export TELEGRAM_BOT_TOKEN="tu_token"
+
+# Opcionales
+export TELEGRAM_ALLOWED_USERS="123456789,987654321"
 export TELEGRAM_RATE_LIMIT_PER_MINUTE=5
 export TELEGRAM_RATE_LIMIT_PER_HOUR=20
 export TELEGRAM_LONG_JOB_THRESHOLD_SECONDS=5
+export TELEGRAM_MAX_CONCURRENT_JOBS=1
+export TELEGRAM_RESULT_FILE_THRESHOLD_BYTES=2500
 ```
+
+Valores operativos recomendados:
+
+- `TELEGRAM_BOT_TOKEN`: obligatorio. Nunca en código ni en commits.
+- `TELEGRAM_ALLOWED_USERS`: vacío para modo público; úsalo si quieres arranque restringido.
+- `TELEGRAM_RATE_LIMIT_PER_MINUTE=5`: límite corto por usuario.
+- `TELEGRAM_RATE_LIMIT_PER_HOUR=20`: límite sostenido por usuario.
+- `TELEGRAM_LONG_JOB_THRESHOLD_SECONDS=5`: a partir de aquí el job ya cuenta como largo en logs.
+- `TELEGRAM_MAX_CONCURRENT_JOBS=1`: evita saturación por usuario en el MVP.
+- `TELEGRAM_RESULT_FILE_THRESHOLD_BYTES=2500`: payloads grandes salen como JSON adjunto.
 
 Arranque local:
 
@@ -270,17 +286,64 @@ Arranque local:
 python -m osint_suite.telegram_bot
 ```
 
+Validación de configuración antes de arrancar:
+
+```bash
+python -m osint_suite.telegram_bot --check-config
+```
+
+Despliegue recomendado en producción: polling con `systemd`
+
+Archivo `/etc/systemd/system/osint-telegram-bot.service`:
+
+```ini
+[Unit]
+Description=OSINT Suite Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=osint
+WorkingDirectory=/opt/osint-suite
+Environment="PATH=/opt/osint-suite/venv/bin"
+Environment="TELEGRAM_BOT_TOKEN=pon_aqui_el_token_o_carga_un_env_file"
+Environment="TELEGRAM_RATE_LIMIT_PER_MINUTE=5"
+Environment="TELEGRAM_RATE_LIMIT_PER_HOUR=20"
+Environment="TELEGRAM_LONG_JOB_THRESHOLD_SECONDS=5"
+Environment="TELEGRAM_MAX_CONCURRENT_JOBS=1"
+ExecStart=/opt/osint-suite/venv/bin/python -m osint_suite.telegram_bot
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Instalación del servicio:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable osint-telegram-bot
+sudo systemctl start osint-telegram-bot
+sudo systemctl status osint-telegram-bot
+```
+
 Verificación manual mínima:
 
 ```bash
-# Validar configuración sin arrancar polling
+# 1. Validar configuración sin arrancar polling
 python -m osint_suite.telegram_bot --check-config
 
-# Después, arrancar el bot y probar en Telegram:
+# 2. Arrancar el bot
+python -m osint_suite.telegram_bot
+
+# 3. Probar en Telegram:
 # /start
 # /help
 # /username johndoe
 # /email usuario@ejemplo.com
+# /phone +34612345678
 ```
 
 Notas operativas:
@@ -288,6 +351,9 @@ Notas operativas:
 - El token solo debe ir en variables de entorno.
 - El bot aplica rate limiting por `user_id`.
 - Los resultados grandes se envían como JSON adjunto en el chat.
+- El patrón recomendado del MVP es `polling`, no webhook.
+- Si el proceso cae, `systemd` debe reiniciarlo automáticamente.
+- No expongas trazas internas ni payloads sensibles en logs.
 
 ## 📊 Monitoreo
 
@@ -297,6 +363,19 @@ Los logs se guardan automáticamente en:
 - Linux: `/var/log/osint-suite/`
 - Windows: `%APPDATA%\osint-suite\logs\`
 - macOS: `~/Library/Logs/osint-suite/`
+
+Para el bot en `systemd`, consulta:
+
+```bash
+journalctl -u osint-telegram-bot -f
+```
+
+Señales mínimas a revisar:
+
+- arranque correcto tras `--check-config`
+- reinicios repetidos del servicio
+- mensajes de rate limiting excesivo
+- errores internos repetidos al ejecutar un mismo comando
 
 ### Health Check
 
@@ -348,6 +427,28 @@ chmod +x -R osint_suite/
 pip install --force-reinstall -r requirements.txt
 ```
 
+### Problema: falta `TELEGRAM_BOT_TOKEN`
+```bash
+# Síntoma
+python -m osint_suite.telegram_bot --check-config
+# -> Missing TELEGRAM_BOT_TOKEN
+
+# Solución
+export TELEGRAM_BOT_TOKEN="tu_token"
+```
+
+### Problema: el bot arranca pero no responde
+
+- Verifica que el token sea correcto y pertenezca al bot esperado.
+- Si `TELEGRAM_ALLOWED_USERS` está definido, confirma que tu `user_id` esté en la lista.
+- Revisa `journalctl -u osint-telegram-bot -f` para ver reinicios o errores internos.
+
+### Problema: demasiados usuarios golpean el bot
+
+- Reduce `TELEGRAM_MAX_CONCURRENT_JOBS` si el host se satura.
+- Baja `TELEGRAM_RATE_LIMIT_PER_MINUTE` o `TELEGRAM_RATE_LIMIT_PER_HOUR`.
+- Si el uso crece de verdad, reevaluar cola externa o arquitectura fuera del MVP.
+
 ## 📈 Escalado
 
 Para uso intensivo, considerar:
@@ -365,10 +466,12 @@ Para uso intensivo, considerar:
 - [ ] Dependencias de desarrollo instaladas si aplica (`pip install -r requirements-dev.txt`)
 - [ ] Herramientas importables (`python -c "from osint_suite import *"`)
 - [ ] Menú principal funciona (`python -m osint_suite.main --menu`)
+- [ ] Config del bot válida (`python -m osint_suite.telegram_bot --check-config`)
+- [ ] Bot arrancando en polling (`python -m osint_suite.telegram_bot`)
 - [ ] Tests de verificación pasan
 - [ ] Logs configurados
 - [ ] Variables de entorno configuradas (si aplica)
-- [ ] Servicio systemd configurado (si aplica)
+- [ ] Servicio `systemd` del bot configurado (si aplica)
 - [ ] Backups configurados
 
 ## 🎯 Comandos Rápidos
