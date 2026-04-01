@@ -8,7 +8,7 @@ las herramientas existentes del paquete.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Sequence
 
 from .company_research import CompanyResearcher
 from .email_osint import EmailOSINT
@@ -24,17 +24,25 @@ class CommandResult:
     filename_prefix: str
 
 
+def format_summary(title: str, fields: Sequence[tuple[str, Any]]) -> str:
+    lines = [title]
+    lines.extend(f"{label}: {value}" for label, value in fields)
+    return "\n".join(lines)
+
+
 def run_username_lookup(username: str) -> CommandResult:
     searcher = UsernameSearcher(delay=0.2)
     results = searcher.search(username, max_workers=5)
     found_platforms = [item["platform"] for item in results.get("found", [])[:5]]
     platform_summary = ", ".join(found_platforms) if found_platforms else "sin perfiles confirmados"
-    summary = (
-        f"Busqueda de username @{results['username']}\n"
-        f"Plataformas revisadas: {results['total_checked']}\n"
-        f"Encontrados: {len(results['found'])}\n"
-        f"No encontrados: {len(results['not_found'])}\n"
-        f"Perfiles destacados: {platform_summary}"
+    summary = format_summary(
+        f"Busqueda de username @{results['username']}",
+        [
+            ("Plataformas revisadas", results["total_checked"]),
+            ("Encontrados", len(results["found"])),
+            ("No encontrados", len(results["not_found"])),
+            ("Perfiles destacados", platform_summary),
+        ],
     )
     return CommandResult(summary=summary, payload=results, filename_prefix=f"username_{results['username']}")
 
@@ -45,12 +53,14 @@ def run_email_lookup(email: str) -> CommandResult:
     validation = results.get("validation") or {}
     domain = validation.get("domain") or "desconocido"
     provider_type = (validation.get("domain_analysis") or {}).get("provider_type", "unknown")
-    summary = (
-        f"Analisis de email {email}\n"
-        f"Valido: {'si' if validation.get('is_valid') else 'no'}\n"
-        f"Dominio: {domain}\n"
-        f"Tipo de proveedor: {provider_type}\n"
-        f"Recomendaciones: {len(results.get('recommendations', []))}"
+    summary = format_summary(
+        f"Analisis de email {email}",
+        [
+            ("Valido", "si" if validation.get("is_valid") else "no"),
+            ("Dominio", domain),
+            ("Tipo de proveedor", provider_type),
+            ("Recomendaciones", len(results.get("recommendations", []))),
+        ],
     )
     return CommandResult(summary=summary, payload=results, filename_prefix=f"email_{email.replace('@', '_at_')}")
 
@@ -59,12 +69,14 @@ def run_phone_lookup(phone_number: str, region: str = "US") -> CommandResult:
     investigator = PhoneInvestigator()
     results = investigator.investigate(phone_number, region)
     parsing = results.get("parsing") or {}
-    summary = (
-        f"Analisis de telefono {phone_number}\n"
-        f"Valido: {'si' if parsing.get('is_valid') else 'no'}\n"
-        f"Pais: {parsing.get('country') or 'desconocido'}\n"
-        f"Tipo: {parsing.get('number_type') or 'desconocido'}\n"
-        f"Operadora: {parsing.get('carrier') or 'sin datos'}"
+    summary = format_summary(
+        f"Analisis de telefono {phone_number}",
+        [
+            ("Valido", "si" if parsing.get("is_valid") else "no"),
+            ("Pais", parsing.get("country") or "desconocido"),
+            ("Tipo", parsing.get("number_type") or "desconocido"),
+            ("Operadora", parsing.get("carrier") or "sin datos"),
+        ],
     )
     digits = "".join(char for char in phone_number if char.isdigit()) or "phone"
     return CommandResult(summary=summary, payload=results, filename_prefix=f"phone_{digits}")
@@ -75,12 +87,14 @@ def run_company_lookup(company_name: str, country_code: str | None = None) -> Co
     results = researcher.search_company(company_name, country_code)
     links = list(results.get("direct_links", {}).keys())[:3]
     links_summary = ", ".join(links) if links else "sin fuentes globales"
-    summary = (
-        f"Investigacion de empresa {company_name}\n"
-        f"Pais: {country_code or 'global'}\n"
-        f"Registros sugeridos: {len(results.get('registers_to_check', []))}\n"
-        f"Fuentes globales: {links_summary}\n"
-        f"Recomendaciones: {len(results.get('recommendations', []))}"
+    summary = format_summary(
+        f"Investigacion de empresa {company_name}",
+        [
+            ("Pais", country_code or "global"),
+            ("Registros sugeridos", len(results.get("registers_to_check", []))),
+            ("Fuentes globales", links_summary),
+            ("Recomendaciones", len(results.get("recommendations", []))),
+        ],
     )
     safe_name = company_name.strip().replace(" ", "_") or "company"
     return CommandResult(summary=summary, payload=results, filename_prefix=f"company_{safe_name}")
@@ -94,11 +108,16 @@ def run_geo_lookup(coords_input: str) -> CommandResult:
 
     results = helper.analyze_coordinates(coords.latitude, coords.longitude)
     location_info = results.get("location_info") or {}
-    summary = (
-        f"Analisis geografico {coords.latitude:.6f}, {coords.longitude:.6f}\n"
-        f"Hemisferio: {location_info.get('hemisphere_ns', 'N/A')} / {location_info.get('hemisphere_ew', 'N/A')}\n"
-        f"Zona horaria aprox: {location_info.get('approx_timezone', 'N/A')}\n"
-        f"Direccion aprox: {location_info.get('approx_address', 'N/A')}"
+    summary = format_summary(
+        f"Analisis geografico {coords.latitude:.6f}, {coords.longitude:.6f}",
+        [
+            (
+                "Hemisferio",
+                f"{location_info.get('hemisphere_ns', 'N/A')} / {location_info.get('hemisphere_ew', 'N/A')}",
+            ),
+            ("Zona horaria aprox", location_info.get("approx_timezone", "N/A")),
+            ("Direccion aprox", location_info.get("approx_address", "N/A")),
+        ],
     )
     filename = f"geo_{coords.latitude}_{coords.longitude}".replace(".", "_")
     return CommandResult(summary=summary, payload=results, filename_prefix=filename)
@@ -111,3 +130,36 @@ SERVICE_HANDLERS: Dict[str, Callable[..., CommandResult]] = {
     "company": run_company_lookup,
     "geo": run_geo_lookup,
 }
+
+
+def dispatch_service(service_name: str, args: Sequence[str]) -> CommandResult:
+    normalized_args = [arg.strip() for arg in args if arg and arg.strip()]
+    if service_name == "phone":
+        return dispatch_phone_service(normalized_args)
+    if service_name == "company":
+        return dispatch_company_service(normalized_args)
+    if service_name in {"username", "email", "geo"}:
+        return SERVICE_HANDLERS[service_name](" ".join(normalized_args).strip())
+    raise ValueError(f"Unsupported service: {service_name}")
+
+
+def dispatch_phone_service(args: Sequence[str]) -> CommandResult:
+    region = "US"
+    phone_parts = list(args)
+    if len(phone_parts) >= 2 and phone_parts[0] == "--region":
+        region = phone_parts[1].upper()
+        phone_parts = phone_parts[2:]
+    if not phone_parts:
+        raise ValueError("Falta el numero de telefono.")
+    return run_phone_lookup(" ".join(phone_parts), region=region)
+
+
+def dispatch_company_service(args: Sequence[str]) -> CommandResult:
+    country_code = None
+    company_parts = list(args)
+    if len(company_parts) >= 2 and company_parts[0] == "--country":
+        country_code = company_parts[1].upper()
+        company_parts = company_parts[2:]
+    if not company_parts:
+        raise ValueError("Falta el nombre de la empresa.")
+    return run_company_lookup(" ".join(company_parts), country_code=country_code)

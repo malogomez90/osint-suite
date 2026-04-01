@@ -22,7 +22,7 @@ from telegram import InputFile, Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from .telegram_services import CommandResult, SERVICE_HANDLERS
+from .telegram_services import CommandResult, dispatch_service
 
 
 logger = logging.getLogger(__name__)
@@ -194,7 +194,7 @@ async def execute_service_command(
         await message.reply_text("Ya tienes una tarea en curso. Espera a que termine antes de lanzar otra.")
         return
 
-    raw_argument = " ".join(context.args).strip()
+    raw_arguments = list(context.args)
     await message.reply_text("Procesando solicitud...")
     task = asyncio.create_task(
         run_command_job(
@@ -202,7 +202,7 @@ async def execute_service_command(
             chat_id=message.chat_id,
             user_id=user_id,
             service_name=service_name,
-            raw_argument=raw_argument,
+            raw_arguments=raw_arguments,
             long_job_threshold_seconds=config.long_job_threshold_seconds,
         )
     )
@@ -215,14 +215,14 @@ async def run_command_job(
     chat_id: int,
     user_id: int,
     service_name: str,
-    raw_argument: str,
+    raw_arguments: list[str],
     long_job_threshold_seconds: int,
 ) -> None:
     limiter: InMemoryRateLimiter = context.application.bot_data["rate_limiter"]
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         start = time.perf_counter()
-        result = await asyncio.to_thread(call_service, service_name, raw_argument)
+        result = await asyncio.to_thread(call_service, service_name, raw_arguments)
         elapsed = time.perf_counter() - start
         if elapsed >= long_job_threshold_seconds:
             logger.info("Long Telegram job completed", extra={"service": service_name, "user_id": user_id})
@@ -239,9 +239,8 @@ async def run_command_job(
         limiter.release_job_slot(user_id)
 
 
-def call_service(service_name: str, raw_argument: str) -> CommandResult:
-    handler = SERVICE_HANDLERS[service_name]
-    return handler(raw_argument)
+def call_service(service_name: str, raw_arguments: list[str]) -> CommandResult:
+    return dispatch_service(service_name, raw_arguments)
 
 
 async def send_command_result(

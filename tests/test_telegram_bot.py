@@ -9,6 +9,7 @@ from osint_suite.telegram_bot import (
     HELP_TEXT,
     TelegramBotConfig,
     InMemoryRateLimiter,
+    call_service,
     start_command,
     help_command,
     username_command,
@@ -208,13 +209,54 @@ def test_run_command_job_returns_sanitized_internal_error(monkeypatch):
     config = TelegramBotConfig(bot_token="token", allowed_users=set())
     context = FakeContext(config)
 
-    def fail_call_service(service_name, raw_argument):
+    def fail_call_service(service_name, raw_arguments):
         raise RuntimeError("sensitive backend trace")
 
     monkeypatch.setattr("osint_suite.telegram_bot.call_service", fail_call_service)
 
-    asyncio.run(run_command_job(context, chat_id=100, user_id=42, service_name="username", raw_argument="john", long_job_threshold_seconds=1))
+    asyncio.run(
+        run_command_job(
+            context,
+            chat_id=100,
+            user_id=42,
+            service_name="username",
+            raw_arguments=["john"],
+            long_job_threshold_seconds=1,
+        )
+    )
 
     assert context.bot.messages == [
         {"chat_id": 100, "text": "Se produjo un error interno al procesar la solicitud."}
     ]
+
+
+def test_call_service_parses_phone_region_option(monkeypatch):
+    captured = {}
+
+    def fake_phone_lookup(phone_number, region="US"):
+        captured["phone_number"] = phone_number
+        captured["region"] = region
+        return CommandResult(summary="ok", payload={}, filename_prefix="phone")
+
+    monkeypatch.setattr("osint_suite.telegram_services.run_phone_lookup", fake_phone_lookup)
+
+    result = call_service("phone", ["--region", "ES", "+34", "612", "345", "678"])
+
+    assert result.summary == "ok"
+    assert captured == {"phone_number": "+34 612 345 678", "region": "ES"}
+
+
+def test_call_service_parses_company_country_option(monkeypatch):
+    captured = {}
+
+    def fake_company_lookup(company_name, country_code=None):
+        captured["company_name"] = company_name
+        captured["country_code"] = country_code
+        return CommandResult(summary="ok", payload={}, filename_prefix="company")
+
+    monkeypatch.setattr("osint_suite.telegram_services.run_company_lookup", fake_company_lookup)
+
+    result = call_service("company", ["--country", "ES", "Acme", "Labs"])
+
+    assert result.summary == "ok"
+    assert captured == {"company_name": "Acme Labs", "country_code": "ES"}
