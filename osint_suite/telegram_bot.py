@@ -35,6 +35,30 @@ from .telegram_services import (
 logger = logging.getLogger(__name__)
 
 
+DOCUMENT_MIME_TYPES = {
+    ".pdf": {"application/pdf"},
+    ".doc": {"application/msword", "application/x-tika-msoffice"},
+    ".docx": {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/zip",
+    },
+    ".xls": {"application/vnd.ms-excel", "application/x-tika-msoffice"},
+    ".xlsx": {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/zip",
+    },
+    ".ppt": {"application/vnd.ms-powerpoint", "application/x-tika-msoffice"},
+    ".pptx": {
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/zip",
+    },
+    ".odt": {"application/vnd.oasis.opendocument.text", "application/zip"},
+    ".ods": {"application/vnd.oasis.opendocument.spreadsheet", "application/zip"},
+    ".odp": {"application/vnd.oasis.opendocument.presentation", "application/zip"},
+    ".rtf": {"application/rtf", "text/rtf"},
+}
+
+
 @dataclass
 class TelegramBotConfig:
     bot_token: str
@@ -192,6 +216,12 @@ async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await message.reply_text("Formato de documento no soportado. Envia PDF u Office/OpenDocument.")
         return
     config: TelegramBotConfig = context.application.bot_data["config"]
+    if is_empty_file(getattr(document, "file_size", None)):
+        await message.reply_text("Archivo vacio o sin contenido.")
+        return
+    if not is_allowed_document_mime_type(file_name, getattr(document, "mime_type", None)):
+        await message.reply_text("Tipo MIME de documento no soportado para este archivo.")
+        return
     if is_file_too_large(getattr(document, "file_size", None), config.max_upload_size_bytes):
         await message.reply_text(f"Archivo demasiado grande. Limite actual: {config.max_upload_size_bytes} bytes.")
         return
@@ -213,6 +243,9 @@ async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     config: TelegramBotConfig = context.application.bot_data["config"]
     largest_photo = photos[-1]
+    if is_empty_file(getattr(largest_photo, "file_size", None)):
+        await message.reply_text("Archivo vacio o sin contenido.")
+        return
     if is_file_too_large(getattr(largest_photo, "file_size", None), config.max_upload_size_bytes):
         await message.reply_text(f"Archivo demasiado grande. Limite actual: {config.max_upload_size_bytes} bytes.")
         return
@@ -228,6 +261,62 @@ async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 def is_file_too_large(file_size: int | None, max_upload_size_bytes: int) -> bool:
     return file_size is not None and file_size > max_upload_size_bytes
+
+
+def is_empty_file(file_size: int | None) -> bool:
+    return file_size is not None and file_size <= 0
+
+
+def is_allowed_document_mime_type(file_name: str, mime_type: str | None) -> bool:
+    if not mime_type:
+        return True
+    allowed = DOCUMENT_MIME_TYPES.get(Path(file_name).suffix.lower())
+    if not allowed:
+        return True
+    return mime_type in allowed
+
+
+def validate_downloaded_upload(service_name: str, temp_path: str, original_name: str) -> None:
+    with open(temp_path, "rb") as handle:
+        header = handle.read(16)
+
+    if not header:
+        raise ValueError("Archivo vacio o sin contenido.")
+
+    if service_name == "document" and not is_valid_document_signature(original_name, header):
+        raise ValueError("Archivo corrupto o no coincide con el tipo esperado.")
+    if service_name == "image" and not is_valid_image_signature(original_name, header):
+        raise ValueError("Archivo corrupto o no coincide con el tipo esperado.")
+
+
+def is_valid_document_signature(file_name: str, header: bytes) -> bool:
+    suffix = Path(file_name).suffix.lower()
+    if suffix == ".pdf":
+        return header.startswith(b"%PDF")
+    if suffix in {".doc", ".xls", ".ppt"}:
+        return header.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+    if suffix in {".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp"}:
+        return header.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"))
+    if suffix == ".rtf":
+        return header.startswith(b"{\\rtf")
+    return True
+
+
+def is_valid_image_signature(file_name: str, header: bytes) -> bool:
+    suffix = Path(file_name).suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        return header.startswith(b"\xff\xd8\xff")
+    if suffix == ".png":
+        return header.startswith(b"\x89PNG\r\n\x1a\n")
+    if suffix == ".gif":
+        return header.startswith((b"GIF87a", b"GIF89a"))
+    if suffix == ".bmp":
+        return header.startswith(b"BM")
+    if suffix in {".tif", ".tiff"}:
+        return header.startswith((b"II*\x00", b"MM\x00*"))
+    if suffix == ".webp":
+        return header.startswith(b"RIFF") and header[8:12] == b"WEBP"
+    return True
 
 
 async def execute_service_command(
@@ -381,6 +470,7 @@ async def run_file_job(
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_DOCUMENT)
         temp_path = await download_file_to_temp_path(context, file_id, original_name)
+        validate_downloaded_upload(service_name, temp_path, original_name)
         start = time.perf_counter()
         result = await asyncio.to_thread(call_file_service, service_name, temp_path, original_name)
         elapsed = time.perf_counter() - start

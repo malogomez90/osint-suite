@@ -351,6 +351,46 @@ def test_document_message_rejects_unsupported_extension():
     assert context.bot.messages == []
 
 
+def test_document_message_rejects_invalid_mime_type_before_background_job():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        effective_message=FakeMessage(
+            chat_id=100,
+            document=SimpleNamespace(
+                file_id="doc-1",
+                file_name="report.pdf",
+                mime_type="application/x-msdownload",
+            ),
+        ),
+    )
+    context = FakeContext(config)
+
+    asyncio.run(document_message(update, context))
+
+    assert update.effective_message.replies == [
+        "Tipo MIME de documento no soportado para este archivo."
+    ]
+    assert context.chat_data == {}
+
+
+def test_document_message_rejects_empty_upload_before_background_job():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        effective_message=FakeMessage(
+            chat_id=100,
+            document=SimpleNamespace(file_id="doc-1", file_name="report.pdf", file_size=0),
+        ),
+    )
+    context = FakeContext(config)
+
+    asyncio.run(document_message(update, context))
+
+    assert update.effective_message.replies == ["Archivo vacio o sin contenido."]
+    assert context.chat_data == {}
+
+
 def test_document_message_rejects_oversized_upload_before_background_job():
     config = TelegramBotConfig(bot_token="token", allowed_users=set(), max_upload_size_bytes=100)
     update = SimpleNamespace(
@@ -370,6 +410,39 @@ def test_document_message_rejects_oversized_upload_before_background_job():
     assert context.chat_data == {}
 
 
+def test_document_message_rejects_corrupt_payload_before_service_call(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        effective_message=FakeMessage(
+            chat_id=100,
+            document=SimpleNamespace(
+                file_id="doc-1",
+                file_name="report.pdf",
+                mime_type="application/pdf",
+                file_size=12,
+            ),
+        ),
+    )
+    context = FakeContext(config)
+    context.bot.files["doc-1"] = FakeTelegramFile(payload=b"not-a-pdf")
+    called = {"value": False}
+
+    def fake_file_service(service_name, file_path, original_name):
+        called["value"] = True
+        return CommandResult(summary="should not run", payload={}, filename_prefix="bad")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_file_service", fake_file_service)
+
+    asyncio.run(run_handler_and_background(document_message, update, context))
+
+    assert update.effective_message.replies == ["Procesando documento..."]
+    assert context.bot.messages == [
+        {"chat_id": 100, "text": "Archivo corrupto o no coincide con el tipo esperado."}
+    ]
+    assert called["value"] is False
+
+
 def test_photo_message_downloads_largest_variant(monkeypatch):
     config = TelegramBotConfig(bot_token="token", allowed_users=set())
     update = SimpleNamespace(
@@ -383,7 +456,7 @@ def test_photo_message_downloads_largest_variant(monkeypatch):
         ),
     )
     context = FakeContext(config)
-    context.bot.files["photo-large"] = FakeTelegramFile(payload=b"\x89PNG\r\n")
+    context.bot.files["photo-large"] = FakeTelegramFile(payload=b"\xff\xd8\xff\xe0jpeg")
     captured = {}
 
     def fake_file_service(service_name, file_path, original_name):
@@ -405,7 +478,7 @@ def test_photo_message_downloads_largest_variant(monkeypatch):
     assert context.bot.messages == [{"chat_id": 100, "text": "Imagen analizada"}]
     assert captured["service_name"] == "image"
     assert captured["original_name"] == "telegram_photo.jpg"
-    assert captured["payload"] == b"\x89PNG\r\n"
+    assert captured["payload"] == b"\xff\xd8\xff\xe0jpeg"
 
 
 def test_photo_message_rejects_oversized_upload_before_background_job():
@@ -428,3 +501,31 @@ def test_photo_message_rejects_oversized_upload_before_background_job():
         "Archivo demasiado grande. Limite actual: 50 bytes."
     ]
     assert context.chat_data == {}
+
+
+def test_photo_message_rejects_corrupt_payload_before_service_call(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        effective_message=FakeMessage(
+            chat_id=100,
+            photo=[SimpleNamespace(file_id="photo-large", file_size=9)],
+        ),
+    )
+    context = FakeContext(config)
+    context.bot.files["photo-large"] = FakeTelegramFile(payload=b"notimage")
+    called = {"value": False}
+
+    def fake_file_service(service_name, file_path, original_name):
+        called["value"] = True
+        return CommandResult(summary="should not run", payload={}, filename_prefix="bad")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_file_service", fake_file_service)
+
+    asyncio.run(run_handler_and_background(photo_message, update, context))
+
+    assert update.effective_message.replies == ["Procesando imagen..."]
+    assert context.bot.messages == [
+        {"chat_id": 100, "text": "Archivo corrupto o no coincide con el tipo esperado."}
+    ]
+    assert called["value"] is False
