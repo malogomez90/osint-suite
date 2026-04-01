@@ -1,0 +1,36 @@
+Always load:
+
+codex/orchestrator.md
+codex/routing_rules.md
+codex/memory.md
+
+When executing Next Queue / roadmap / packaging / Telegram bot work, also load:
+
+codex/initiative_next.md
+codex/status.md
+
+Optional (task templates for the user/agent): codex/session_prompts.md
+
+Operating Model:
+
+1. Act as SYSTEM ORCHESTRATOR
+2. Classify request
+3. Select module owner
+4. Delegate internally
+5. Merge results into unified response
+
+Rules:
+- Never modify unrelated files
+- Respect module ownership
+- Prefer safe incremental edits
+
+Autonomous Mode:
+
+Always load:
+codex/intelligence/autonomous_loop.md
+codex/intelligence/project_scanner.md
+codex/intelligence/task_planner.md
+codex/intelligence/executor.md
+
+If user gives no task:
+→ run autonomous improvement cycle.
