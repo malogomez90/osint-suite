@@ -29,6 +29,7 @@ from .telegram_services import (
     dispatch_file_service,
     dispatch_service,
     is_supported_document,
+    normalize_filename_prefix,
 )
 
 
@@ -560,9 +561,10 @@ async def send_command_result(
     await context.bot.send_message(chat_id=chat_id, text=summary)
 
     if len(payload_bytes) >= config.result_file_threshold_bytes:
+        normalized_filename = f"{normalize_filename_prefix(result.filename_prefix)}.json"
         await context.bot.send_document(
             chat_id=chat_id,
-            document=InputFile(io.BytesIO(payload_bytes), filename=f"{result.filename_prefix}.json"),
+            document=InputFile(io.BytesIO(payload_bytes), filename=normalized_filename),
             caption="Resultado completo en JSON.",
         )
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Sequence
@@ -35,8 +36,14 @@ IMAGE_FORMATS = tuple(sorted(ImageMetadataExtractor().supported_formats))
 
 def format_summary(title: str, fields: Sequence[tuple[str, Any]]) -> str:
     lines = [title]
-    lines.extend(f"{label}: {value}" for label, value in fields)
+    lines.extend(f"- {label}: {value}" for label, value in fields)
     return "\n".join(lines)
+
+
+def normalize_filename_prefix(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower())
+    normalized = normalized.strip("_")
+    return normalized or "result"
 
 
 def run_username_lookup(username: str) -> CommandResult:

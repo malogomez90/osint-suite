@@ -22,7 +22,7 @@ from osint_suite.telegram_bot import (
     run_file_job,
 )
 from osint_suite.telegram_services import run_username_lookup
-from osint_suite.telegram_services import CommandResult
+from osint_suite.telegram_services import CommandResult, format_summary
 
 
 class FakeMessage:
@@ -230,7 +230,7 @@ def test_send_command_result_attaches_json_when_payload_is_large():
     result = CommandResult(
         summary="Resumen corto",
         payload={"data": "x" * 100},
-        filename_prefix="username_john",
+        filename_prefix="User Name/John.Doe",
     )
 
     asyncio.run(send_command_result(context, 100, result))
@@ -238,6 +238,19 @@ def test_send_command_result_attaches_json_when_payload_is_large():
     assert context.bot.messages == [{"chat_id": 100, "text": "Resumen corto"}]
     assert len(context.bot.documents) == 1
     assert context.bot.documents[0]["caption"] == "Resultado completo en JSON."
+    assert context.bot.documents[0]["document"].filename == "user_name_john_doe.json"
+
+
+def test_format_summary_uses_bulleted_lines_for_scanability():
+    summary = format_summary(
+        "Analisis de ejemplo",
+        [
+            ("Campo A", "valor"),
+            ("Campo B", "otro"),
+        ],
+    )
+
+    assert summary == "Analisis de ejemplo\n- Campo A: valor\n- Campo B: otro"
 
 
 def test_run_command_job_returns_sanitized_internal_error(monkeypatch):
