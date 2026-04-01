@@ -2,17 +2,35 @@
 Setup script para OSINT Suite
 """
 
+from pathlib import Path
+
 from setuptools import setup, find_packages
 
-with open("README_OSINT_SUITE.md", "r", encoding="utf-8") as fh:
+from osint_suite import __version__
+
+
+ROOT = Path(__file__).resolve().parent
+DEV_REQUIREMENTS = {"pytest", "black", "flake8"}
+
+with (ROOT / "README.md").open("r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-with open("requirements.txt", "r", encoding="utf-8") as fh:
-    requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
+with (ROOT / "requirements.txt").open("r", encoding="utf-8") as fh:
+    requirements = []
+    for raw_line in fh:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        package_name = line.split("[", 1)[0].split("=", 1)[0].split("<", 1)[0].split(">", 1)[0].strip()
+        if package_name.lower() in DEV_REQUIREMENTS:
+            continue
+
+        requirements.append(line)
 
 setup(
     name="osint-suite",
-    version="1.0.0",
+    version=__version__,
     author="OSINT Suite Team",
     description="Suite de herramientas OSINT - Excluye temas de redes de internet",
     long_description=long_description,
@@ -26,13 +44,11 @@ setup(
         "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
     ],
-    python_requires=">=3.7",
+    python_requires=">=3.9",
     install_requires=requirements,
     entry_points={
         "console_scripts": [

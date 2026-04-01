@@ -138,6 +138,17 @@ def test_setup_py_uses_package_version_as_single_source_of_truth(repo_root):
     assert 'version="1.0.0"' not in setup_contents
 
 
+def test_setup_py_declares_python_compatibility_consistent_with_telegram_dependency(repo_root):
+    setup_contents = (repo_root / "setup.py").read_text(encoding="utf-8")
+
+    assert 'python_requires=">=3.9"' in setup_contents
+    assert '"Programming Language :: Python :: 3.9"' in setup_contents
+    assert '"Programming Language :: Python :: 3.10"' in setup_contents
+    assert '"Programming Language :: Python :: 3.11"' in setup_contents
+    assert '"Programming Language :: Python :: 3.7"' not in setup_contents
+    assert '"Programming Language :: Python :: 3.8"' not in setup_contents
+
+
 @pytest.mark.parametrize("editable", [True, False], ids=["editable", "non_editable"])
 def test_package_install_exposes_expected_package_metadata(repo_root, editable):
     with temporary_venv() as python_bin:
@@ -235,6 +246,39 @@ print("ok")
         entrypoint_result = run_python_code(python_bin, entrypoint_check, cwd=repo_root)
         assert entrypoint_result.returncode == 0, entrypoint_result.stderr
         assert entrypoint_result.stdout.strip() == "ok"
+
+
+@pytest.mark.parametrize("editable", [True, False], ids=["editable", "non_editable"])
+def test_telegram_bot_check_config_smoke_after_install(repo_root, editable):
+    with temporary_venv() as python_bin:
+        install_result = install_package(python_bin, repo_root, editable=editable)
+        assert install_result.returncode == 0, install_result.stderr
+        requirements_install = run_command(
+            [str(python_bin), "-m", "pip", "install", "-r", str(repo_root / "requirements.txt")],
+            cwd=repo_root,
+        )
+        assert requirements_install.returncode == 0, requirements_install.stderr
+
+        check_config = """
+import os
+import subprocess
+import sys
+
+env = os.environ.copy()
+env["TELEGRAM_BOT_TOKEN"] = "dummy-token"
+result = subprocess.run(
+    [sys.executable, "-m", "osint_suite.telegram_bot", "--check-config"],
+    capture_output=True,
+    text=True,
+    env=env,
+)
+assert result.returncode == 0, result.stderr
+assert "Telegram bot configuration OK" in result.stdout
+print("ok")
+"""
+        result = run_python_code(python_bin, check_config, cwd=repo_root)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "ok"
 
 
 def test_install_script_supports_optional_dev_dependencies(repo_root):
