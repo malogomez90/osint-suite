@@ -1,5 +1,6 @@
 import os
 import asyncio
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +19,7 @@ from osint_suite.telegram_bot import (
     photo_message,
     send_command_result,
     run_command_job,
+    run_file_job,
 )
 from osint_suite.telegram_services import run_username_lookup
 from osint_suite.telegram_services import CommandResult
@@ -101,6 +103,7 @@ def test_telegram_config_reads_token_and_limits_from_env(monkeypatch):
     monkeypatch.setenv("TELEGRAM_RATE_LIMIT_PER_HOUR", "33")
     monkeypatch.setenv("TELEGRAM_LONG_JOB_THRESHOLD_SECONDS", "9")
     monkeypatch.setenv("TELEGRAM_MAX_UPLOAD_SIZE_BYTES", "2048")
+    monkeypatch.setenv("TELEGRAM_ANALYSIS_TIMEOUT_SECONDS", "12")
 
     config = TelegramBotConfig.from_env()
 
@@ -109,6 +112,7 @@ def test_telegram_config_reads_token_and_limits_from_env(monkeypatch):
     assert config.rate_limit_per_hour == 33
     assert config.long_job_threshold_seconds == 9
     assert config.max_upload_size_bytes == 2048
+    assert config.analysis_timeout_seconds == 12
 
 
 def test_telegram_config_requires_token(monkeypatch):
@@ -258,6 +262,32 @@ def test_run_command_job_returns_sanitized_internal_error(monkeypatch):
 
     assert context.bot.messages == [
         {"chat_id": 100, "text": "Se produjo un error interno al procesar la solicitud."}
+    ]
+
+
+def test_run_command_job_replies_when_analysis_times_out(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), analysis_timeout_seconds=0.01)
+    context = FakeContext(config)
+
+    def slow_call_service(service_name, raw_arguments):
+        time.sleep(0.05)
+        return CommandResult(summary="late", payload={}, filename_prefix="late")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_service", slow_call_service)
+
+    asyncio.run(
+        run_command_job(
+            context,
+            chat_id=100,
+            user_id=42,
+            service_name="username",
+            raw_arguments=["john"],
+            long_job_threshold_seconds=1,
+        )
+    )
+
+    assert context.bot.messages == [
+        {"chat_id": 100, "text": "La solicitud excedio el tiempo maximo de analisis."}
     ]
 
 
@@ -529,3 +559,31 @@ def test_photo_message_rejects_corrupt_payload_before_service_call(monkeypatch):
         {"chat_id": 100, "text": "Archivo corrupto o no coincide con el tipo esperado."}
     ]
     assert called["value"] is False
+
+
+def test_run_file_job_replies_when_analysis_times_out(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), analysis_timeout_seconds=0.01)
+    context = FakeContext(config)
+    context.bot.files["doc-1"] = FakeTelegramFile(payload=b"%PDF-1.4")
+
+    def slow_file_service(service_name, file_path, original_name):
+        time.sleep(0.05)
+        return CommandResult(summary="late", payload={}, filename_prefix="late")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_file_service", slow_file_service)
+
+    asyncio.run(
+        run_file_job(
+            context,
+            chat_id=100,
+            user_id=42,
+            service_name="document",
+            file_id="doc-1",
+            original_name="report.pdf",
+            long_job_threshold_seconds=1,
+        )
+    )
+
+    assert context.bot.messages == [
+        {"chat_id": 100, "text": "La solicitud excedio el tiempo maximo de analisis."}
+    ]

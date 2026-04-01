@@ -69,6 +69,7 @@ class TelegramBotConfig:
     max_concurrent_jobs: int = 1
     result_file_threshold_bytes: int = 2500
     max_upload_size_bytes: int = 10 * 1024 * 1024
+    analysis_timeout_seconds: float = 30.0
 
     @classmethod
     def from_env(cls) -> "TelegramBotConfig":
@@ -91,6 +92,7 @@ class TelegramBotConfig:
             max_concurrent_jobs=int(os.environ.get("TELEGRAM_MAX_CONCURRENT_JOBS", "1")),
             result_file_threshold_bytes=int(os.environ.get("TELEGRAM_RESULT_FILE_THRESHOLD_BYTES", "2500")),
             max_upload_size_bytes=int(os.environ.get("TELEGRAM_MAX_UPLOAD_SIZE_BYTES", str(10 * 1024 * 1024))),
+            analysis_timeout_seconds=float(os.environ.get("TELEGRAM_ANALYSIS_TIMEOUT_SECONDS", "30")),
         )
 
 
@@ -410,16 +412,42 @@ async def run_command_job(
     long_job_threshold_seconds: int,
 ) -> None:
     limiter: InMemoryRateLimiter = context.application.bot_data["rate_limiter"]
+    config: TelegramBotConfig = context.application.bot_data["config"]
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         start = time.perf_counter()
-        result = await asyncio.to_thread(call_service, service_name, raw_arguments)
+        result = await asyncio.wait_for(
+            asyncio.to_thread(call_service, service_name, raw_arguments),
+            timeout=config.analysis_timeout_seconds,
+        )
         elapsed = time.perf_counter() - start
+        logger.info(
+            "Telegram command completed",
+            extra={"service": service_name, "user_id": user_id, "outcome": "success", "elapsed_seconds": elapsed},
+        )
         if elapsed >= long_job_threshold_seconds:
             logger.info("Long Telegram job completed", extra={"service": service_name, "user_id": user_id})
         await send_command_result(context, chat_id, result)
     except ValueError as exc:
+        logger.info(
+            "Telegram command validation failed",
+            extra={"service": service_name, "user_id": user_id, "outcome": "validation"},
+        )
         await context.bot.send_message(chat_id=chat_id, text=str(exc))
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Telegram command timed out",
+            extra={
+                "service": service_name,
+                "user_id": user_id,
+                "outcome": "timeout",
+                "timeout_seconds": config.analysis_timeout_seconds,
+            },
+        )
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="La solicitud excedio el tiempo maximo de analisis.",
+        )
     except Exception:
         logger.exception("Telegram command failed", extra={"service": service_name, "user_id": user_id})
         await context.bot.send_message(
@@ -466,19 +494,45 @@ async def run_file_job(
     long_job_threshold_seconds: int,
 ) -> None:
     limiter: InMemoryRateLimiter = context.application.bot_data["rate_limiter"]
+    config: TelegramBotConfig = context.application.bot_data["config"]
     temp_path = ""
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_DOCUMENT)
         temp_path = await download_file_to_temp_path(context, file_id, original_name)
         validate_downloaded_upload(service_name, temp_path, original_name)
         start = time.perf_counter()
-        result = await asyncio.to_thread(call_file_service, service_name, temp_path, original_name)
+        result = await asyncio.wait_for(
+            asyncio.to_thread(call_file_service, service_name, temp_path, original_name),
+            timeout=config.analysis_timeout_seconds,
+        )
         elapsed = time.perf_counter() - start
+        logger.info(
+            "Telegram file job completed",
+            extra={"service": service_name, "user_id": user_id, "outcome": "success", "elapsed_seconds": elapsed},
+        )
         if elapsed >= long_job_threshold_seconds:
             logger.info("Long Telegram file job completed", extra={"service": service_name, "user_id": user_id})
         await send_command_result(context, chat_id, result)
     except ValueError as exc:
+        logger.info(
+            "Telegram file validation failed",
+            extra={"service": service_name, "user_id": user_id, "outcome": "validation"},
+        )
         await context.bot.send_message(chat_id=chat_id, text=str(exc))
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Telegram file job timed out",
+            extra={
+                "service": service_name,
+                "user_id": user_id,
+                "outcome": "timeout",
+                "timeout_seconds": config.analysis_timeout_seconds,
+            },
+        )
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="La solicitud excedio el tiempo maximo de analisis.",
+        )
     except Exception:
         logger.exception("Telegram file command failed", extra={"service": service_name, "user_id": user_id})
         await context.bot.send_message(
