@@ -1,6 +1,7 @@
 import os
 import asyncio
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -104,6 +105,10 @@ def make_update(user_id=42, chat_id=100):
         effective_user=SimpleNamespace(id=user_id),
         effective_message=message,
     )
+
+
+def fixture_path(name):
+    return Path(__file__).resolve().parent / "fixtures" / name
 
 
 def test_telegram_config_reads_token_and_limits_from_env(monkeypatch):
@@ -704,6 +709,14 @@ def test_run_image_lookup_reports_gps_and_privacy_risk(monkeypatch):
     assert result.filename_prefix == "image_photo"
 
 
+def test_run_image_lookup_with_real_gps_fixture():
+    result = run_image_lookup(str(fixture_path("image_with_gps.jpg")), "image_with_gps.jpg")
+
+    assert "GPS: si" in result.summary
+    assert result.payload["gps_info"]["latitude_decimal"] == 40.4
+    assert result.payload["gps_info"]["longitude_decimal"] == -3.7
+
+
 def test_run_image_lookup_reports_no_exif_or_gps(monkeypatch):
     class FakeExtractor:
         def analyze_image(self, image_path):
@@ -722,6 +735,13 @@ def test_run_image_lookup_reports_no_exif_or_gps(monkeypatch):
 
     assert "GPS: no" in result.summary
     assert "Riesgos privacidad: 0" in result.summary
+
+
+def test_run_image_lookup_with_real_no_exif_fixture():
+    result = run_image_lookup(str(fixture_path("image_no_exif.jpg")), "image_no_exif.jpg")
+
+    assert "GPS: no" in result.summary
+    assert result.payload["gps_info"] is None
 
 
 def test_run_document_lookup_reports_partial_non_fatal_error(monkeypatch):
@@ -743,6 +763,21 @@ def test_run_document_lookup_reports_partial_non_fatal_error(monkeypatch):
     assert "Tipo: PDF" in result.summary
     assert "Error: Metadatos XMP no disponibles" in result.summary
     assert result.filename_prefix == "document_report"
+
+
+def test_run_document_lookup_with_real_minimal_pdf_fixture():
+    result = run_document_lookup(str(fixture_path("document_minimal.pdf")), "document_minimal.pdf")
+
+    assert "Tipo: PDF" in result.summary
+    assert result.payload["file_name"] == "document_minimal.pdf"
+    assert "error" in result.payload
+
+
+def test_run_document_lookup_with_real_corrupt_pdf_fixture():
+    result = run_document_lookup(str(fixture_path("document_corrupt.pdf")), "document_corrupt.pdf")
+
+    assert "Tipo: PDF" in result.summary
+    assert "Error:" in result.summary
 
 
 def test_send_command_result_attaches_json_for_large_file_analysis_payload():
