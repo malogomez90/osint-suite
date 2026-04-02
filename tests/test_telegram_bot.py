@@ -2,12 +2,14 @@ import os
 import asyncio
 import time
 import sys
+import io
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 
+import osint_suite.telegram_services as telegram_services
 from osint_suite.telegram_bot import (
     HELP_TEXT,
     TelegramBotConfig,
@@ -30,6 +32,7 @@ from osint_suite.telegram_services import (
     format_summary,
     run_document_lookup,
     run_image_lookup,
+    dispatch_service,
 )
 from osint_suite.document_analyzer import DocumentAnalyzer
 
@@ -188,6 +191,21 @@ def test_load_dotenv_defaults_still_fails_when_token_missing(monkeypatch, tmp_pa
 
     with pytest.raises(ValueError, match="TELEGRAM_BOT_TOKEN"):
         TelegramBotConfig.from_env()
+
+
+def test_dispatch_service_suppresses_unicode_stdout_from_underlying_tools(monkeypatch):
+    fake_stdout = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+
+    def noisy_handler(value):
+        print("✗ salida interna")
+        return CommandResult(summary=f"ok {value}", payload={}, filename_prefix="demo")
+
+    monkeypatch.setattr(sys, "stdout", fake_stdout)
+    monkeypatch.setitem(telegram_services.SERVICE_HANDLERS, "username", noisy_handler)
+
+    result = dispatch_service("username", ["demo"])
+
+    assert result.summary == "ok demo"
 
 
 def test_rate_limiter_blocks_when_per_minute_limit_reached():

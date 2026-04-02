@@ -209,12 +209,13 @@ FILE_HANDLERS: Dict[str, Callable[[str, str], CommandResult]] = {
 
 def dispatch_service(service_name: str, args: Sequence[str]) -> CommandResult:
     normalized_args = [arg.strip() for arg in args if arg and arg.strip()]
-    if service_name == "phone":
-        return dispatch_phone_service(normalized_args)
-    if service_name == "company":
-        return dispatch_company_service(normalized_args)
-    if service_name in {"username", "email", "geo"}:
-        return SERVICE_HANDLERS[service_name](" ".join(normalized_args).strip())
+    with contextlib.redirect_stdout(io.StringIO()):
+        if service_name == "phone":
+            return dispatch_phone_service(normalized_args)
+        if service_name == "company":
+            return dispatch_company_service(normalized_args)
+        if service_name in {"username", "email", "geo"}:
+            return SERVICE_HANDLERS[service_name](" ".join(normalized_args).strip())
     raise ValueError(f"Unsupported service: {service_name}")
 
 
