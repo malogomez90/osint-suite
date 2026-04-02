@@ -25,6 +25,15 @@ OPERATIONAL_DOCS = [
     ("codex/module_protocol.md", ["Module Protocol", "Ownership", "Handoff"]),
 ]
 
+GITIGNORE_ENTRIES = [
+    ".vscode/",
+    ".pytest_cache/",
+    "build/",
+    "*.egg-info/",
+    "__pycache__/",
+    "*.py[cod]",
+]
+
 
 def load_runtime_requirements(repo_root):
     return {
@@ -107,6 +116,15 @@ def test_setup_script_exists_and_bootstraps_codex_files(repo_root):
     assert "codex/quality_gates.md" in contents
     assert "codex/module_protocol.md" in contents
     assert "codex/intelligence/project_scanner.md" in contents
+
+
+def test_gitignore_covers_local_generated_artifacts(repo_root):
+    gitignore_path = repo_root / ".gitignore"
+    contents = gitignore_path.read_text(encoding="utf-8")
+
+    assert gitignore_path.exists()
+    for entry in GITIGNORE_ENTRIES:
+        assert entry in contents
 
 
 def test_requirements_files_separate_runtime_and_dev_dependencies(repo_root):
