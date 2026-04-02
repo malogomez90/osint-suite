@@ -28,6 +28,8 @@ from .telegram_services import (
     CommandResult,
     dispatch_file_service,
     dispatch_service,
+    IMAGE_FORMATS,
+    DOCUMENT_FORMATS,
     is_supported_document,
     normalize_filename_prefix,
 )
@@ -70,7 +72,11 @@ class TelegramBotConfig:
     max_concurrent_jobs: int = 1
     result_file_threshold_bytes: int = 2500
     max_upload_size_bytes: int = 10 * 1024 * 1024
+    max_document_upload_size_bytes: int = 10 * 1024 * 1024
+    max_image_upload_size_bytes: int = 10 * 1024 * 1024
     analysis_timeout_seconds: float = 30.0
+    allowed_document_extensions: set[str] | None = None
+    allowed_image_extensions: set[str] | None = None
 
     @classmethod
     def from_env(cls) -> "TelegramBotConfig":
@@ -84,6 +90,7 @@ class TelegramBotConfig:
             for item in raw_allowed_users.split(",")
             if item.strip()
         }
+        default_limit = int(os.environ.get("TELEGRAM_MAX_UPLOAD_SIZE_BYTES", str(10 * 1024 * 1024)))
         return cls(
             bot_token=bot_token,
             allowed_users=allowed_users,
@@ -92,8 +99,22 @@ class TelegramBotConfig:
             long_job_threshold_seconds=int(os.environ.get("TELEGRAM_LONG_JOB_THRESHOLD_SECONDS", "5")),
             max_concurrent_jobs=int(os.environ.get("TELEGRAM_MAX_CONCURRENT_JOBS", "1")),
             result_file_threshold_bytes=int(os.environ.get("TELEGRAM_RESULT_FILE_THRESHOLD_BYTES", "2500")),
-            max_upload_size_bytes=int(os.environ.get("TELEGRAM_MAX_UPLOAD_SIZE_BYTES", str(10 * 1024 * 1024))),
+            max_upload_size_bytes=default_limit,
+            max_document_upload_size_bytes=int(
+                os.environ.get("TELEGRAM_MAX_DOCUMENT_UPLOAD_SIZE_BYTES", str(default_limit))
+            ),
+            max_image_upload_size_bytes=int(
+                os.environ.get("TELEGRAM_MAX_IMAGE_UPLOAD_SIZE_BYTES", str(default_limit))
+            ),
             analysis_timeout_seconds=float(os.environ.get("TELEGRAM_ANALYSIS_TIMEOUT_SECONDS", "30")),
+            allowed_document_extensions=parse_allowed_extensions(
+                os.environ.get("TELEGRAM_ALLOWED_DOCUMENT_EXTENSIONS"),
+                DOCUMENT_FORMATS,
+            ),
+            allowed_image_extensions=parse_allowed_extensions(
+                os.environ.get("TELEGRAM_ALLOWED_IMAGE_EXTENSIONS"),
+                IMAGE_FORMATS,
+            ),
         )
 
 
@@ -219,14 +240,19 @@ async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await message.reply_text("Formato de documento no soportado. Envia PDF u Office/OpenDocument.")
         return
     config: TelegramBotConfig = context.application.bot_data["config"]
+    if not is_allowed_extension(file_name, config.allowed_document_extensions):
+        await message.reply_text("Extension de documento no permitida por la politica actual.")
+        return
     if is_empty_file(getattr(document, "file_size", None)):
         await message.reply_text("Archivo vacio o sin contenido.")
         return
     if not is_allowed_document_mime_type(file_name, getattr(document, "mime_type", None)):
         await message.reply_text("Tipo MIME de documento no soportado para este archivo.")
         return
-    if is_file_too_large(getattr(document, "file_size", None), config.max_upload_size_bytes):
-        await message.reply_text(f"Archivo demasiado grande. Limite actual: {config.max_upload_size_bytes} bytes.")
+    if is_file_too_large(getattr(document, "file_size", None), config.max_document_upload_size_bytes):
+        await message.reply_text(
+            f"Archivo demasiado grande. Limite actual: {config.max_document_upload_size_bytes} bytes."
+        )
         return
     await execute_file_command(
         update=update,
@@ -246,11 +272,16 @@ async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     config: TelegramBotConfig = context.application.bot_data["config"]
     largest_photo = photos[-1]
+    if not is_allowed_extension("telegram_photo.jpg", config.allowed_image_extensions):
+        await message.reply_text("Extension de imagen no permitida por la politica actual.")
+        return
     if is_empty_file(getattr(largest_photo, "file_size", None)):
         await message.reply_text("Archivo vacio o sin contenido.")
         return
-    if is_file_too_large(getattr(largest_photo, "file_size", None), config.max_upload_size_bytes):
-        await message.reply_text(f"Archivo demasiado grande. Limite actual: {config.max_upload_size_bytes} bytes.")
+    if is_file_too_large(getattr(largest_photo, "file_size", None), config.max_image_upload_size_bytes):
+        await message.reply_text(
+            f"Archivo demasiado grande. Limite actual: {config.max_image_upload_size_bytes} bytes."
+        )
         return
     await execute_file_command(
         update=update,
@@ -277,6 +308,26 @@ def is_allowed_document_mime_type(file_name: str, mime_type: str | None) -> bool
     if not allowed:
         return True
     return mime_type in allowed
+
+
+def parse_allowed_extensions(raw_value: str | None, default_extensions: Sequence[str]) -> set[str]:
+    if not raw_value:
+        return {extension.lower() for extension in default_extensions}
+    extensions = set()
+    for item in raw_value.split(","):
+        value = item.strip().lower()
+        if not value:
+            continue
+        if not value.startswith("."):
+            value = f".{value}"
+        extensions.add(value)
+    return extensions or {extension.lower() for extension in default_extensions}
+
+
+def is_allowed_extension(file_name: str, allowed_extensions: set[str] | None) -> bool:
+    if not allowed_extensions:
+        return True
+    return Path(file_name).suffix.lower() in allowed_extensions
 
 
 def validate_downloaded_upload(service_name: str, temp_path: str, original_name: str) -> None:

@@ -109,6 +109,10 @@ def test_telegram_config_reads_token_and_limits_from_env(monkeypatch):
     monkeypatch.setenv("TELEGRAM_LONG_JOB_THRESHOLD_SECONDS", "9")
     monkeypatch.setenv("TELEGRAM_MAX_UPLOAD_SIZE_BYTES", "2048")
     monkeypatch.setenv("TELEGRAM_ANALYSIS_TIMEOUT_SECONDS", "12")
+    monkeypatch.setenv("TELEGRAM_MAX_DOCUMENT_UPLOAD_SIZE_BYTES", "4096")
+    monkeypatch.setenv("TELEGRAM_MAX_IMAGE_UPLOAD_SIZE_BYTES", "1024")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_DOCUMENT_EXTENSIONS", ".pdf,.docx")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_IMAGE_EXTENSIONS", ".jpg,.png")
 
     config = TelegramBotConfig.from_env()
 
@@ -118,6 +122,10 @@ def test_telegram_config_reads_token_and_limits_from_env(monkeypatch):
     assert config.long_job_threshold_seconds == 9
     assert config.max_upload_size_bytes == 2048
     assert config.analysis_timeout_seconds == 12
+    assert config.max_document_upload_size_bytes == 4096
+    assert config.max_image_upload_size_bytes == 1024
+    assert config.allowed_document_extensions == {".pdf", ".docx"}
+    assert config.allowed_image_extensions == {".jpg", ".png"}
 
 
 def test_telegram_config_requires_token(monkeypatch):
@@ -399,6 +407,29 @@ def test_document_message_rejects_unsupported_extension():
     assert context.bot.messages == []
 
 
+def test_document_message_rejects_disallowed_extension_from_policy():
+    config = TelegramBotConfig(
+        bot_token="token",
+        allowed_users=set(),
+        allowed_document_extensions={".pdf"},
+    )
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        effective_message=FakeMessage(
+            chat_id=100,
+            document=SimpleNamespace(file_id="doc-1", file_name="report.docx"),
+        ),
+    )
+    context = FakeContext(config)
+
+    asyncio.run(document_message(update, context))
+
+    assert update.effective_message.replies == [
+        "Extension de documento no permitida por la politica actual."
+    ]
+    assert context.chat_data == {}
+
+
 def test_document_message_rejects_invalid_mime_type_before_background_job():
     config = TelegramBotConfig(bot_token="token", allowed_users=set())
     update = SimpleNamespace(
@@ -440,7 +471,12 @@ def test_document_message_rejects_empty_upload_before_background_job():
 
 
 def test_document_message_rejects_oversized_upload_before_background_job():
-    config = TelegramBotConfig(bot_token="token", allowed_users=set(), max_upload_size_bytes=100)
+    config = TelegramBotConfig(
+        bot_token="token",
+        allowed_users=set(),
+        max_upload_size_bytes=1000,
+        max_document_upload_size_bytes=100,
+    )
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=42),
         effective_message=FakeMessage(
@@ -530,7 +566,12 @@ def test_photo_message_downloads_largest_variant(monkeypatch):
 
 
 def test_photo_message_rejects_oversized_upload_before_background_job():
-    config = TelegramBotConfig(bot_token="token", allowed_users=set(), max_upload_size_bytes=50)
+    config = TelegramBotConfig(
+        bot_token="token",
+        allowed_users=set(),
+        max_upload_size_bytes=500,
+        max_image_upload_size_bytes=50,
+    )
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=42),
         effective_message=FakeMessage(
@@ -547,6 +588,29 @@ def test_photo_message_rejects_oversized_upload_before_background_job():
 
     assert update.effective_message.replies == [
         "Archivo demasiado grande. Limite actual: 50 bytes."
+    ]
+    assert context.chat_data == {}
+
+
+def test_photo_message_rejects_disallowed_extension_from_policy():
+    config = TelegramBotConfig(
+        bot_token="token",
+        allowed_users=set(),
+        allowed_image_extensions={".png"},
+    )
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=42),
+        effective_message=FakeMessage(
+            chat_id=100,
+            photo=[SimpleNamespace(file_id="photo-large", file_size=10)],
+        ),
+    )
+    context = FakeContext(config)
+
+    asyncio.run(photo_message(update, context))
+
+    assert update.effective_message.replies == [
+        "Extension de imagen no permitida por la politica actual."
     ]
     assert context.chat_data == {}
 
