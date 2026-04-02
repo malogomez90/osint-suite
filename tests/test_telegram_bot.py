@@ -259,6 +259,40 @@ def test_send_command_result_attaches_json_when_payload_is_large():
     assert context.bot.documents[0]["document"].filename == "user_name_john_doe.json"
 
 
+def test_send_command_result_chunks_long_summary_before_json_fallback():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=1000)
+    context = FakeContext(config)
+    long_line = "A" * 2000
+    result = CommandResult(
+        summary=f"{long_line}\n{long_line}\n{long_line}",
+        payload={"kind": "small"},
+        filename_prefix="chunk_test",
+    )
+
+    asyncio.run(send_command_result(context, 100, result))
+
+    assert len(context.bot.messages) >= 2
+    assert all(len(item["text"]) <= 3500 for item in context.bot.messages)
+    assert context.bot.documents == []
+
+
+def test_send_command_result_chunks_summary_and_still_attaches_json_for_large_payload():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=40)
+    context = FakeContext(config)
+    long_summary = ("Bloque largo " * 400).strip()
+    result = CommandResult(
+        summary=long_summary,
+        payload={"data": "x" * 200},
+        filename_prefix="chunk_big",
+    )
+
+    asyncio.run(send_command_result(context, 100, result))
+
+    assert len(context.bot.messages) >= 2
+    assert len(context.bot.documents) == 1
+    assert context.bot.documents[0]["document"].filename == "chunk_big.json"
+
+
 def test_format_summary_uses_bulleted_lines_for_scanability():
     summary = format_summary(
         "Analisis de ejemplo",

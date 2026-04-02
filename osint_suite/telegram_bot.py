@@ -547,6 +547,23 @@ def call_file_service(service_name: str, file_path: str, original_name: str) -> 
     return dispatch_file_service(service_name, file_path, original_name)
 
 
+def split_text_chunks(text: str, max_chunk_length: int = 3500) -> list[str]:
+    if len(text) <= max_chunk_length:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > max_chunk_length:
+        split_at = remaining.rfind("\n", 0, max_chunk_length)
+        if split_at <= 0:
+            split_at = max_chunk_length
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip("\n")
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
 async def download_file_to_temp_path(
     context: ContextTypes.DEFAULT_TYPE,
     file_id: str,
@@ -634,12 +651,8 @@ async def send_command_result(
 ) -> None:
     config: TelegramBotConfig = context.application.bot_data["config"]
     payload_bytes = json.dumps(result.payload, ensure_ascii=False, indent=2).encode("utf-8")
-    summary = result.summary
-
-    if len(summary) > 3500:
-        summary = summary[:3450] + "\n...[resumen truncado]"
-
-    await context.bot.send_message(chat_id=chat_id, text=summary)
+    for chunk in split_text_chunks(result.summary):
+        await context.bot.send_message(chat_id=chat_id, text=chunk)
 
     if len(payload_bytes) >= config.result_file_threshold_bytes:
         normalized_filename = f"{normalize_filename_prefix(result.filename_prefix)}.json"
