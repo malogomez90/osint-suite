@@ -17,6 +17,7 @@ from osint_suite.telegram_bot import (
     load_dotenv_defaults,
     call_service,
     call_file_service,
+    record_abuse_signal,
     start_command,
     help_command,
     username_command,
@@ -399,6 +400,35 @@ def test_run_command_job_returns_sanitized_internal_error(monkeypatch):
     ]
 
 
+def test_run_command_job_logs_operator_facing_success_fields(monkeypatch, caplog):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    context = FakeContext(config)
+
+    def successful_call_service(service_name, raw_arguments):
+        return CommandResult(summary="ok", payload={}, filename_prefix="ok")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_service", successful_call_service)
+
+    with caplog.at_level("INFO"):
+        asyncio.run(
+            run_command_job(
+                context,
+                chat_id=100,
+                user_id=42,
+                service_name="username",
+                raw_arguments=["john"],
+                long_job_threshold_seconds=30,
+            )
+        )
+
+    success_record = next(record for record in caplog.records if record.message == "Telegram command completed")
+    assert success_record.service == "username"
+    assert success_record.user_id == 42
+    assert success_record.chat_id == 100
+    assert success_record.outcome == "success"
+    assert success_record.elapsed_seconds >= 0
+
+
 def test_run_command_job_replies_when_analysis_times_out(monkeypatch):
     config = TelegramBotConfig(bot_token="token", allowed_users=set(), analysis_timeout_seconds=0.01)
     context = FakeContext(config)
@@ -423,6 +453,27 @@ def test_run_command_job_replies_when_analysis_times_out(monkeypatch):
     assert context.bot.messages == [
         {"chat_id": 100, "text": "La solicitud excedio el tiempo maximo de analisis."}
     ]
+
+
+def test_record_abuse_signal_logs_signal_details_for_operator_visibility(caplog):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    context = FakeContext(config)
+
+    with caplog.at_level("WARNING"):
+        record_abuse_signal(
+            context,
+            "rate_limit_denied",
+            user_id=42,
+            detail="username",
+            chat_id=100,
+        )
+
+    warning_record = next(record for record in caplog.records if record.message == "Telegram abuse signal recorded")
+    assert warning_record.signal == "rate_limit_denied"
+    assert warning_record.user_id == 42
+    assert warning_record.chat_id == 100
+    assert warning_record.detail == "username"
+    assert warning_record.outcome == "abuse_signal"
 
 
 def test_call_service_parses_phone_region_option(monkeypatch):

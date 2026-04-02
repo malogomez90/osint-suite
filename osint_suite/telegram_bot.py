@@ -243,19 +243,19 @@ async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     config: TelegramBotConfig = context.application.bot_data["config"]
     if not is_allowed_extension(file_name, config.allowed_document_extensions):
-        record_abuse_signal(context, "upload_policy_denied", user_id, file_name)
+        record_abuse_signal(context, "upload_policy_denied", user_id, file_name, message.chat_id)
         await message.reply_text("Extension de documento no permitida por la politica actual.")
         return
     if is_empty_file(getattr(document, "file_size", None)):
-        record_abuse_signal(context, "empty_upload_denied", user_id, file_name)
+        record_abuse_signal(context, "empty_upload_denied", user_id, file_name, message.chat_id)
         await message.reply_text("Archivo vacio o sin contenido.")
         return
     if not is_allowed_document_mime_type(file_name, getattr(document, "mime_type", None)):
-        record_abuse_signal(context, "upload_validation_denied", user_id, file_name)
+        record_abuse_signal(context, "upload_validation_denied", user_id, file_name, message.chat_id)
         await message.reply_text("Tipo MIME de documento no soportado para este archivo.")
         return
     if is_file_too_large(getattr(document, "file_size", None), config.max_document_upload_size_bytes):
-        record_abuse_signal(context, "upload_size_denied", user_id, file_name)
+        record_abuse_signal(context, "upload_size_denied", user_id, file_name, message.chat_id)
         await message.reply_text(
             f"Archivo demasiado grande. Limite actual: {config.max_document_upload_size_bytes} bytes."
         )
@@ -280,15 +280,15 @@ async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     config: TelegramBotConfig = context.application.bot_data["config"]
     largest_photo = photos[-1]
     if not is_allowed_extension("telegram_photo.jpg", config.allowed_image_extensions):
-        record_abuse_signal(context, "upload_policy_denied", user_id, "telegram_photo.jpg")
+        record_abuse_signal(context, "upload_policy_denied", user_id, "telegram_photo.jpg", message.chat_id)
         await message.reply_text("Extension de imagen no permitida por la politica actual.")
         return
     if is_empty_file(getattr(largest_photo, "file_size", None)):
-        record_abuse_signal(context, "empty_upload_denied", user_id, "telegram_photo.jpg")
+        record_abuse_signal(context, "empty_upload_denied", user_id, "telegram_photo.jpg", message.chat_id)
         await message.reply_text("Archivo vacio o sin contenido.")
         return
     if is_file_too_large(getattr(largest_photo, "file_size", None), config.max_image_upload_size_bytes):
-        record_abuse_signal(context, "upload_size_denied", user_id, "telegram_photo.jpg")
+        record_abuse_signal(context, "upload_size_denied", user_id, "telegram_photo.jpg", message.chat_id)
         await message.reply_text(
             f"Archivo demasiado grande. Limite actual: {config.max_image_upload_size_bytes} bytes."
         )
@@ -345,12 +345,19 @@ def record_abuse_signal(
     signal_name: str,
     user_id: int,
     detail: str | None = None,
+    chat_id: int | None = None,
 ) -> None:
     abuse_signals = context.application.bot_data.setdefault("abuse_signals", defaultdict(int))
     abuse_signals[signal_name] += 1
     logger.warning(
         "Telegram abuse signal recorded",
-        extra={"signal": signal_name, "user_id": user_id, "detail": detail},
+        extra={
+            "signal": signal_name,
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "detail": detail,
+            "outcome": "abuse_signal",
+        },
     )
 
 
@@ -416,12 +423,12 @@ async def execute_service_command(
         return
 
     if not limiter.allow_request(user_id):
-        record_abuse_signal(context, "rate_limit_denied", user_id, service_name)
+        record_abuse_signal(context, "rate_limit_denied", user_id, service_name, message.chat_id)
         await message.reply_text("Limite de uso excedido. Espera un momento antes de reintentar.")
         return
 
     if not limiter.try_acquire_job_slot(user_id):
-        record_abuse_signal(context, "concurrent_job_denied", user_id, service_name)
+        record_abuse_signal(context, "concurrent_job_denied", user_id, service_name, message.chat_id)
         await message.reply_text("Ya tienes una tarea en curso. Espera a que termine antes de lanzar otra.")
         return
 
@@ -458,12 +465,12 @@ async def execute_file_command(
     limiter: InMemoryRateLimiter = context.application.bot_data["rate_limiter"]
 
     if not limiter.allow_request(user_id):
-        record_abuse_signal(context, "rate_limit_denied", user_id, service_name)
+        record_abuse_signal(context, "rate_limit_denied", user_id, service_name, message.chat_id)
         await message.reply_text("Limite de uso excedido. Espera un momento antes de reintentar.")
         return
 
     if not limiter.try_acquire_job_slot(user_id):
-        record_abuse_signal(context, "concurrent_job_denied", user_id, service_name)
+        record_abuse_signal(context, "concurrent_job_denied", user_id, service_name, message.chat_id)
         await message.reply_text("Ya tienes una tarea en curso. Espera a que termine antes de lanzar otra.")
         return
 
@@ -503,16 +510,25 @@ async def run_command_job(
         elapsed = time.perf_counter() - start
         logger.info(
             "Telegram command completed",
-            extra={"service": service_name, "user_id": user_id, "outcome": "success", "elapsed_seconds": elapsed},
+            extra={
+                "service": service_name,
+                "user_id": user_id,
+                "chat_id": chat_id,
+                "outcome": "success",
+                "elapsed_seconds": elapsed,
+            },
         )
         if elapsed >= long_job_threshold_seconds:
-            logger.info("Long Telegram job completed", extra={"service": service_name, "user_id": user_id})
+            logger.info(
+                "Long Telegram job completed",
+                extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "success"},
+            )
         await send_command_result(context, chat_id, result)
     except ValueError as exc:
-        record_abuse_signal(context, "command_validation_denied", user_id, service_name)
+        record_abuse_signal(context, "command_validation_denied", user_id, service_name, chat_id)
         logger.info(
             "Telegram command validation failed",
-            extra={"service": service_name, "user_id": user_id, "outcome": "validation"},
+            extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "validation"},
         )
         await context.bot.send_message(chat_id=chat_id, text=str(exc))
     except asyncio.TimeoutError:
@@ -521,6 +537,7 @@ async def run_command_job(
             extra={
                 "service": service_name,
                 "user_id": user_id,
+                "chat_id": chat_id,
                 "outcome": "timeout",
                 "timeout_seconds": config.analysis_timeout_seconds,
             },
@@ -530,7 +547,10 @@ async def run_command_job(
             text="La solicitud excedio el tiempo maximo de analisis.",
         )
     except Exception:
-        logger.exception("Telegram command failed", extra={"service": service_name, "user_id": user_id})
+        logger.exception(
+            "Telegram command failed",
+            extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "internal_error"},
+        )
         await context.bot.send_message(
             chat_id=chat_id,
             text="Se produjo un error interno al procesar la solicitud.",
@@ -606,16 +626,25 @@ async def run_file_job(
         elapsed = time.perf_counter() - start
         logger.info(
             "Telegram file job completed",
-            extra={"service": service_name, "user_id": user_id, "outcome": "success", "elapsed_seconds": elapsed},
+            extra={
+                "service": service_name,
+                "user_id": user_id,
+                "chat_id": chat_id,
+                "outcome": "success",
+                "elapsed_seconds": elapsed,
+            },
         )
         if elapsed >= long_job_threshold_seconds:
-            logger.info("Long Telegram file job completed", extra={"service": service_name, "user_id": user_id})
+            logger.info(
+                "Long Telegram file job completed",
+                extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "success"},
+            )
         await send_command_result(context, chat_id, result)
     except ValueError as exc:
-        record_abuse_signal(context, "file_validation_denied", user_id, service_name)
+        record_abuse_signal(context, "file_validation_denied", user_id, service_name, chat_id)
         logger.info(
             "Telegram file validation failed",
-            extra={"service": service_name, "user_id": user_id, "outcome": "validation"},
+            extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "validation"},
         )
         await context.bot.send_message(chat_id=chat_id, text=str(exc))
     except asyncio.TimeoutError:
@@ -624,6 +653,7 @@ async def run_file_job(
             extra={
                 "service": service_name,
                 "user_id": user_id,
+                "chat_id": chat_id,
                 "outcome": "timeout",
                 "timeout_seconds": config.analysis_timeout_seconds,
             },
@@ -633,7 +663,10 @@ async def run_file_job(
             text="La solicitud excedio el tiempo maximo de analisis.",
         )
     except Exception:
-        logger.exception("Telegram file command failed", extra={"service": service_name, "user_id": user_id})
+        logger.exception(
+            "Telegram file command failed",
+            extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "internal_error"},
+        )
         await context.bot.send_message(
             chat_id=chat_id,
             text="Se produjo un error interno al procesar la solicitud.",
