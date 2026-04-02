@@ -12,6 +12,7 @@ from osint_suite.telegram_bot import (
     HELP_TEXT,
     TelegramBotConfig,
     InMemoryRateLimiter,
+    load_dotenv_defaults,
     call_service,
     call_file_service,
     start_command,
@@ -141,6 +142,49 @@ def test_telegram_config_reads_token_and_limits_from_env(monkeypatch):
 
 def test_telegram_config_requires_token(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    with pytest.raises(ValueError, match="TELEGRAM_BOT_TOKEN"):
+        TelegramBotConfig.from_env()
+
+
+def test_load_dotenv_defaults_reads_token_from_dotenv(monkeypatch, tmp_path):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text("TELEGRAM_BOT_TOKEN=dotenv-token\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    load_dotenv_defaults()
+
+    assert os.environ["TELEGRAM_BOT_TOKEN"] == "dotenv-token"
+
+
+def test_load_dotenv_defaults_reads_token_from_utf8_bom_dotenv(monkeypatch, tmp_path):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text("TELEGRAM_BOT_TOKEN=dotenv-token\n", encoding="utf-8-sig")
+    monkeypatch.chdir(tmp_path)
+
+    load_dotenv_defaults()
+
+    assert os.environ["TELEGRAM_BOT_TOKEN"] == "dotenv-token"
+
+
+def test_load_dotenv_defaults_keeps_process_env_precedence(monkeypatch, tmp_path):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "process-token")
+    env_path = tmp_path / ".env"
+    env_path.write_text("TELEGRAM_BOT_TOKEN=dotenv-token\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    load_dotenv_defaults()
+
+    assert os.environ["TELEGRAM_BOT_TOKEN"] == "process-token"
+
+
+def test_load_dotenv_defaults_still_fails_when_token_missing(monkeypatch, tmp_path):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    load_dotenv_defaults()
 
     with pytest.raises(ValueError, match="TELEGRAM_BOT_TOKEN"):
         TelegramBotConfig.from_env()

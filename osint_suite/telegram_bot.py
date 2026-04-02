@@ -681,6 +681,23 @@ def configure_logging() -> None:
     )
 
 
+def load_dotenv_defaults(dotenv_path: str = ".env") -> None:
+    path = Path(dotenv_path)
+    if not path.is_file():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip().lstrip("\ufeff")
+        if not key or key in os.environ:
+            continue
+        value = value.strip().strip("'\"")
+        os.environ[key] = value
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Bot de Telegram para OSINT Suite",
@@ -694,6 +711,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     configure_logging()
     parser = build_argument_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    load_dotenv_defaults()
     config = TelegramBotConfig.from_env()
 
     if args.check_config:

@@ -34,6 +34,12 @@ Required:
 
 - `TELEGRAM_BOT_TOKEN`
 
+Configuration loading order at startup:
+
+1. Existing process environment variables (highest priority)
+2. Missing values loaded from a local `.env` file in the current working directory
+3. If `TELEGRAM_BOT_TOKEN` is still missing, startup fails with configuration error
+
 Optional for the first deployment:
 
 - `TELEGRAM_ALLOWED_USERS`
@@ -92,6 +98,8 @@ export TELEGRAM_BOT_TOKEN=<real-token>
 python -m osint_suite.telegram_bot --check-config
 ```
 
+For local development, you can also place `TELEGRAM_BOT_TOKEN` in a `.env` file at the repository root and run the same command. If both are present, the process environment value wins.
+
 Expected output:
 
 ```text
@@ -131,6 +139,7 @@ WantedBy=multi-user.target
 Operational notes:
 
 - Store environment variables in a root-readable file such as `/etc/osint-suite/telegram-bot.env`.
+- In production, keep using real environment injection (`EnvironmentFile`, secret manager, or host env vars). The local `.env` fallback is mainly for developer ergonomics.
 - Do not commit the token or the environment file.
 - Keep the service as a single instance while rate limiting and background jobs remain in memory.
 
