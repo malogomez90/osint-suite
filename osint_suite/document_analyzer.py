@@ -88,8 +88,8 @@ class DocumentAnalyzer:
                     try:
                         first_page_text = reader.pages[0].extract_text()[:500]
                         result['structure_info']['first_page_preview'] = first_page_text
-                    except:
-                        pass
+                    except Exception as exc:
+                        print_warning(f"No se pudo extraer vista previa de la primera página: {exc}")
                 
                 print_success(f"PDF analizado: {result['structure_info']['num_pages']} páginas")
                 

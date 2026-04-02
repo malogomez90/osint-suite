@@ -1,6 +1,7 @@
 import os
 import asyncio
 import time
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,6 +30,7 @@ from osint_suite.telegram_services import (
     run_document_lookup,
     run_image_lookup,
 )
+from osint_suite.document_analyzer import DocumentAnalyzer
 
 
 class FakeMessage:
@@ -778,6 +780,33 @@ def test_run_document_lookup_with_real_corrupt_pdf_fixture():
 
     assert "Tipo: PDF" in result.summary
     assert "Error:" in result.summary
+
+
+def test_document_analyzer_keeps_pdf_result_when_preview_extraction_fails(monkeypatch, tmp_path):
+    class FakePage:
+        def extract_text(self):
+            raise ValueError("preview unavailable")
+
+    class FakeReader:
+        def __init__(self, file_path):
+            self.metadata = None
+            self.pages = [FakePage()]
+            self.is_encrypted = False
+
+        def get_fields(self):
+            return None
+
+    fake_module = SimpleNamespace(PdfReader=FakeReader)
+    monkeypatch.setitem(sys.modules, "pypdf", fake_module)
+
+    pdf_path = tmp_path / "preview_failure.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n")
+
+    result = DocumentAnalyzer().analyze_pdf(str(pdf_path))
+
+    assert result["error"] is None
+    assert result["structure_info"]["num_pages"] == 1
+    assert "first_page_preview" not in result["structure_info"]
 
 
 def test_send_command_result_attaches_json_for_large_file_analysis_payload():
