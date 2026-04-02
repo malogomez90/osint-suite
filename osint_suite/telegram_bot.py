@@ -180,6 +180,7 @@ def create_application(config: TelegramBotConfig) -> Application:
     )
     application.bot_data["config"] = config
     application.bot_data["rate_limiter"] = limiter
+    application.bot_data["abuse_signals"] = defaultdict(int)
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
@@ -231,6 +232,7 @@ async def geo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
+    user_id = update.effective_user.id if update.effective_user else 0
     document = getattr(message, "document", None)
     if document is None:
         await message.reply_text("No se recibio ningun documento.")
@@ -241,15 +243,19 @@ async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     config: TelegramBotConfig = context.application.bot_data["config"]
     if not is_allowed_extension(file_name, config.allowed_document_extensions):
+        record_abuse_signal(context, "upload_policy_denied", user_id, file_name)
         await message.reply_text("Extension de documento no permitida por la politica actual.")
         return
     if is_empty_file(getattr(document, "file_size", None)):
+        record_abuse_signal(context, "empty_upload_denied", user_id, file_name)
         await message.reply_text("Archivo vacio o sin contenido.")
         return
     if not is_allowed_document_mime_type(file_name, getattr(document, "mime_type", None)):
+        record_abuse_signal(context, "upload_validation_denied", user_id, file_name)
         await message.reply_text("Tipo MIME de documento no soportado para este archivo.")
         return
     if is_file_too_large(getattr(document, "file_size", None), config.max_document_upload_size_bytes):
+        record_abuse_signal(context, "upload_size_denied", user_id, file_name)
         await message.reply_text(
             f"Archivo demasiado grande. Limite actual: {config.max_document_upload_size_bytes} bytes."
         )
@@ -266,6 +272,7 @@ async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
+    user_id = update.effective_user.id if update.effective_user else 0
     photos = list(getattr(message, "photo", []) or [])
     if not photos:
         await message.reply_text("No se recibio ninguna imagen.")
@@ -273,12 +280,15 @@ async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     config: TelegramBotConfig = context.application.bot_data["config"]
     largest_photo = photos[-1]
     if not is_allowed_extension("telegram_photo.jpg", config.allowed_image_extensions):
+        record_abuse_signal(context, "upload_policy_denied", user_id, "telegram_photo.jpg")
         await message.reply_text("Extension de imagen no permitida por la politica actual.")
         return
     if is_empty_file(getattr(largest_photo, "file_size", None)):
+        record_abuse_signal(context, "empty_upload_denied", user_id, "telegram_photo.jpg")
         await message.reply_text("Archivo vacio o sin contenido.")
         return
     if is_file_too_large(getattr(largest_photo, "file_size", None), config.max_image_upload_size_bytes):
+        record_abuse_signal(context, "upload_size_denied", user_id, "telegram_photo.jpg")
         await message.reply_text(
             f"Archivo demasiado grande. Limite actual: {config.max_image_upload_size_bytes} bytes."
         )
@@ -328,6 +338,20 @@ def is_allowed_extension(file_name: str, allowed_extensions: set[str] | None) ->
     if not allowed_extensions:
         return True
     return Path(file_name).suffix.lower() in allowed_extensions
+
+
+def record_abuse_signal(
+    context: ContextTypes.DEFAULT_TYPE,
+    signal_name: str,
+    user_id: int,
+    detail: str | None = None,
+) -> None:
+    abuse_signals = context.application.bot_data.setdefault("abuse_signals", defaultdict(int))
+    abuse_signals[signal_name] += 1
+    logger.warning(
+        "Telegram abuse signal recorded",
+        extra={"signal": signal_name, "user_id": user_id, "detail": detail},
+    )
 
 
 def validate_downloaded_upload(service_name: str, temp_path: str, original_name: str) -> None:
@@ -392,10 +416,12 @@ async def execute_service_command(
         return
 
     if not limiter.allow_request(user_id):
+        record_abuse_signal(context, "rate_limit_denied", user_id, service_name)
         await message.reply_text("Limite de uso excedido. Espera un momento antes de reintentar.")
         return
 
     if not limiter.try_acquire_job_slot(user_id):
+        record_abuse_signal(context, "concurrent_job_denied", user_id, service_name)
         await message.reply_text("Ya tienes una tarea en curso. Espera a que termine antes de lanzar otra.")
         return
 
@@ -432,10 +458,12 @@ async def execute_file_command(
     limiter: InMemoryRateLimiter = context.application.bot_data["rate_limiter"]
 
     if not limiter.allow_request(user_id):
+        record_abuse_signal(context, "rate_limit_denied", user_id, service_name)
         await message.reply_text("Limite de uso excedido. Espera un momento antes de reintentar.")
         return
 
     if not limiter.try_acquire_job_slot(user_id):
+        record_abuse_signal(context, "concurrent_job_denied", user_id, service_name)
         await message.reply_text("Ya tienes una tarea en curso. Espera a que termine antes de lanzar otra.")
         return
 
@@ -481,6 +509,7 @@ async def run_command_job(
             logger.info("Long Telegram job completed", extra={"service": service_name, "user_id": user_id})
         await send_command_result(context, chat_id, result)
     except ValueError as exc:
+        record_abuse_signal(context, "command_validation_denied", user_id, service_name)
         logger.info(
             "Telegram command validation failed",
             extra={"service": service_name, "user_id": user_id, "outcome": "validation"},
@@ -566,6 +595,7 @@ async def run_file_job(
             logger.info("Long Telegram file job completed", extra={"service": service_name, "user_id": user_id})
         await send_command_result(context, chat_id, result)
     except ValueError as exc:
+        record_abuse_signal(context, "file_validation_denied", user_id, service_name)
         logger.info(
             "Telegram file validation failed",
             extra={"service": service_name, "user_id": user_id, "outcome": "validation"},

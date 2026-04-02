@@ -83,6 +83,10 @@ class FakeContext:
         self.chat_data = {}
 
 
+def get_abuse_signals(context):
+    return context.application.bot_data.get("abuse_signals", {})
+
+
 async def drain_background_tasks(context):
     tasks = list(context.chat_data.get("background_tasks", set()))
     if tasks:
@@ -221,6 +225,7 @@ def test_username_command_replies_when_rate_limited():
     asyncio.run(username_command(update, context))
 
     assert update.effective_message.replies == ["Limite de uso excedido. Espera un momento antes de reintentar."]
+    assert get_abuse_signals(context)["rate_limit_denied"] == 1
 
 
 def test_username_command_replies_when_job_slot_is_busy():
@@ -428,6 +433,7 @@ def test_document_message_rejects_disallowed_extension_from_policy():
         "Extension de documento no permitida por la politica actual."
     ]
     assert context.chat_data == {}
+    assert get_abuse_signals(context)["upload_policy_denied"] == 1
 
 
 def test_document_message_rejects_invalid_mime_type_before_background_job():
