@@ -5,7 +5,7 @@ Current Status
 - Orchestration status: orchestrator, routing rules, memory, and autonomous loop are present.
 - Product direction (agreed): public **Telegram bot** as the near-term UI; no separate web frontend until an explicit design/scope exists.
 - Planning source of truth for the next mount: **read `codex/initiative_next.md` first** (phases A→B→C, owners, checklists).
-- **Last progress:** Phase A install QA now includes **exact match** of installed distribution requirements (`Requires-Dist`) vs `requirements.txt` (editable and non-editable installs); `tests/test_setup.py` at **29 passed** (as of last verification). Prior work already covered metadata/version, console scripts, and dev/runtime split.
+- **Last progress:** setup/Telegram baseline now verifies at **72 passed** in `tests/test_setup.py` + `tests/test_telegram_bot.py`; recent work also replaced deprecated `PyPDF2` with `pypdf` and added a root `.gitignore` for local verification artifacts. Prior work already covered metadata/version, console scripts, and dev/runtime split.
 - **Git note:** when `tests/` is still untracked (`??`), add and commit those files when you own the change set; do not mix unrelated dirty tree unless intentional.
 
 Active Loop
