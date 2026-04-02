@@ -1,7 +1,7 @@
+.env
 .vscode/
 .pytest_cache/
 build/
 *.egg-info/
 __pycache__/
 *.py[cod]
-

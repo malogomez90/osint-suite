@@ -26,6 +26,7 @@ OPERATIONAL_DOCS = [
 ]
 
 GITIGNORE_ENTRIES = [
+    ".env",
     ".vscode/",
     ".pytest_cache/",
     "build/",
