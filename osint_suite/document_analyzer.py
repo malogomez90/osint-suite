@@ -57,9 +57,9 @@ class DocumentAnalyzer:
         }
         
         try:
-            # Intentar usar PyPDF2
+            # Intentar usar pypdf
             try:
-                from PyPDF2 import PdfReader
+                from pypdf import PdfReader
                 
                 reader = PdfReader(file_path)
                 
@@ -94,8 +94,8 @@ class DocumentAnalyzer:
                 print_success(f"PDF analizado: {result['structure_info']['num_pages']} páginas")
                 
             except ImportError:
-                print_warning("PyPDF2 no instalado, usando análisis básico")
-                result['error'] = 'PyPDF2 no disponible'
+                print_warning("pypdf no instalado, usando análisis básico")
+                result['error'] = 'pypdf no disponible'
             
             # Análisis de strings del PDF (búsqueda de URLs, emails, etc.)
             result['extracted_data'] = self._extract_strings_from_pdf(file_path)

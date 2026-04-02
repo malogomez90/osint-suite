@@ -156,7 +156,7 @@ Las dependencias de runtime se instalan automáticamente con `requirements.txt`:
 | lxml | >=4.9.0 | Parser XML/HTML |
 | Pillow | >=9.0.0 | Procesamiento de imágenes |
 | piexif | >=1.1.3 | Manipulación EXIF |
-| PyPDF2 | >=3.0.0 | Análisis de PDF |
+| pypdf | >=4.2.0 | Análisis de PDF |
 | python-docx | >=0.8.11 | Análisis de Word |
 | openpyxl | >=3.0.10 | Análisis de Excel |
 | olefile | >=0.46 | Análisis de archivos OLE |

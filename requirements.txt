@@ -9,7 +9,7 @@ Pillow>=9.0.0
 piexif>=1.1.3
 
 # Procesamiento de documentos
-PyPDF2>=2.0.0
+pypdf>=4.2.0
 python-docx>=0.8.11
 openpyxl>=3.0.10
 olefile>=0.46

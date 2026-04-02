@@ -57,7 +57,7 @@ Se ha creado una suite completa de **10 herramientas OSINT en Python**, excluyen
 ### 6. Analizador de Documentos (`document_analyzer.py`)
 - **Función**: Metadatos de PDF y Office
 - **Características**:
-  - PDF (PyPDF2)
+  - PDF (pypdf)
   - Word (.docx con python-docx, .doc con olefile)
   - Excel (.xlsx con openpyxl, .xls con olefile)
   - Extracción de patrones (emails, URLs, teléfonos)
