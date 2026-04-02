@@ -127,6 +127,13 @@ def test_gitignore_covers_local_generated_artifacts(repo_root):
         assert entry in contents
 
 
+def test_repo_does_not_track_python_bytecode(repo_root):
+    result = run_command(["git", "ls-files", "osint_suite/__pycache__"], cwd=repo_root)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ""
+
+
 def test_requirements_files_separate_runtime_and_dev_dependencies(repo_root):
     runtime_requirements = {
         line.strip()
