@@ -29,7 +29,7 @@ Suite completa de herramientas OSINT en Python, **excluyendo temas de redes de i
 
 ```bash
 # Clonar o navegar al directorio
-cd awesome-osint
+cd osint-suite
 
 # Crear entorno virtual (recomendado)
 python -m venv venv
@@ -110,7 +110,7 @@ results = phone_tool.investigate("+14155552671")
 ## 📁 Estructura del Proyecto
 
 ```
-awesome-osint/
+osint-suite/
 ├── osint_suite/
 │   ├── __init__.py
 │   ├── main.py              # Menú principal
