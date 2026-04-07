@@ -22,6 +22,8 @@ from osint_suite.telegram_bot import (
     start_command,
     help_command,
     username_command,
+    tginfo_command,
+    tggroupinfo_command,
     document_message,
     photo_message,
     send_command_result,
@@ -324,6 +326,10 @@ def test_help_text_describes_commands_and_uploads():
     assert "/geo <lat, lon>" in HELP_TEXT
     assert "/social <usuario>" in HELP_TEXT
     assert "/breach <email|usuario>" in HELP_TEXT
+    assert "/tg <username>" in HELP_TEXT
+    assert "/tggroup <username>" in HELP_TEXT
+    assert "/tginfo <username>" in HELP_TEXT
+    assert "/tggroupinfo <username>" in HELP_TEXT
     assert "Busca presencia de un usuario en multiples plataformas" in HELP_TEXT
     assert "Analiza perfiles sociales y referencias cruzadas" in HELP_TEXT
     assert "Si envias un email" in HELP_TEXT
@@ -492,9 +498,184 @@ def test_create_application_registers_all_service_commands():
         if hasattr(handler, "commands")
     }
 
-    expected_commands = {"start", "help", "username", "email", "phone", "company", "geo", "social", "breach"}
+    expected_commands = {
+        "start",
+        "help",
+        "username",
+        "email",
+        "phone",
+        "company",
+        "geo",
+        "social",
+        "breach",
+        "tg",
+        "tggroup",
+        "tginfo",
+        "tggroupinfo",
+    }
 
     assert expected_commands.issubset(registered_commands)
+
+
+def test_tginfo_command_replies_when_userbot_is_not_configured():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+
+    asyncio.run(tginfo_command(update, context))
+
+    assert update.effective_message.replies == [
+        "Userbot no configurado. Añade TELEGRAM_APP_API_ID, TELEGRAM_APP_API_HASH y TELEGRAM_USERBOT_SESSION_1 al entorno."
+    ]
+
+
+def test_tginfo_command_requires_argument_when_pool_exists():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+    context.application.bot_data["tg_osint_pool"] = object()
+
+    asyncio.run(tginfo_command(update, context))
+
+    assert update.effective_message.replies == ["Uso: /tginfo <username>"]
+
+
+def test_tginfo_command_returns_summary_and_json(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=10)
+    update = make_update()
+    context = FakeContext(config, args=["demo_user"])
+
+    class FakePool:
+        async def lookup_user_info(self, username):
+            assert username == "demo_user"
+            return {
+                "id": 123,
+                "username": "demo_user",
+                "full_name": "Demo User",
+                "bio": "investigator",
+                "phone": None,
+                "status_type": "UserStatusOnline",
+                "language_code": "es",
+                "common_chats_count": 2,
+                "profile_photo": {"has_photo": True},
+                "public_usernames": ["demo_user", "demo_alias"],
+                "verified": True,
+                "premium": True,
+                "bot": False,
+                "restricted": False,
+                "scam": False,
+                "fake": False,
+                "deleted": False,
+                "payload_padding": "x" * 100,
+            }
+
+    context.application.bot_data["tg_osint_pool"] = FakePool()
+
+    asyncio.run(tginfo_command(update, context))
+
+    assert update.effective_message.replies == ["Consultando via userbot..."]
+    assert len(context.bot.messages) == 1
+    assert "Recon Telegram usuario @demo_user" in context.bot.messages[0]["text"]
+    assert "Idioma: es" in context.bot.messages[0]["text"]
+    assert len(context.bot.documents) == 1
+    assert context.bot.documents[0]["document"].filename == "tginfo_demo_user.json"
+
+
+def test_tggroupinfo_command_returns_summary(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=["demo_group"])
+
+    class FakePool:
+        async def lookup_channel_info(self, username):
+            assert username == "demo_group"
+            return {
+                "id": 999,
+                "username": "demo_group",
+                "title": "Demo Group",
+                "description": "public intel",
+                "participants_count": 321,
+                "type_label": "supergrupo",
+                "public_usernames": ["demo_group"],
+                "linked_chat_id": 444,
+                "slowmode_seconds": 30,
+                "chat_photo": {"has_photo": False},
+                "verified": True,
+                "forum": True,
+                "join_request": False,
+                "join_to_send": True,
+                "restricted": False,
+                "scam": False,
+                "fake": False,
+            }
+
+    context.application.bot_data["tg_osint_pool"] = FakePool()
+
+    asyncio.run(tggroupinfo_command(update, context))
+
+    assert update.effective_message.replies == ["Consultando via userbot..."]
+    assert len(context.bot.messages) == 1
+    assert "Recon Telegram supergrupo @demo_group" in context.bot.messages[0]["text"]
+    assert "Slowmode: 30" in context.bot.messages[0]["text"]
+
+
+def test_tginfo_command_surfaces_validation_error_from_pool():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=["wrongtarget"])
+
+    class FakePool:
+        async def lookup_user_info(self, username):
+            raise ValueError("Ese username corresponde a un grupo o canal. Usa /tggroupinfo.")
+
+    context.application.bot_data["tg_osint_pool"] = FakePool()
+
+    asyncio.run(tginfo_command(update, context))
+
+    assert update.effective_message.replies == [
+        "Consultando via userbot...",
+        "Ese username corresponde a un grupo o canal. Usa /tggroupinfo.",
+    ]
+    assert get_abuse_signals(context)["command_validation_denied"] == 1
+
+
+def test_tggroupinfo_command_surfaces_validation_error_from_pool():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=["person"])
+
+    class FakePool:
+        async def lookup_channel_info(self, username):
+            raise ValueError("Ese username corresponde a un usuario. Usa /tginfo.")
+
+    context.application.bot_data["tg_osint_pool"] = FakePool()
+
+    asyncio.run(tggroupinfo_command(update, context))
+
+    assert update.effective_message.replies == [
+        "Consultando via userbot...",
+        "Ese username corresponde a un usuario. Usa /tginfo.",
+    ]
+    assert get_abuse_signals(context)["command_validation_denied"] == 1
+
+
+def test_tginfo_command_surfaces_controlled_failure():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=["demo"])
+
+    class FakePool:
+        async def lookup_user_info(self, username):
+            raise ControlledServiceError("Userbot en espera por flood limit. Reintenta en unos minutos.")
+
+    context.application.bot_data["tg_osint_pool"] = FakePool()
+
+    asyncio.run(tginfo_command(update, context))
+
+    assert update.effective_message.replies == [
+        "Consultando via userbot...",
+        "Userbot en espera por flood limit. Reintenta en unos minutos.",
+    ]
 
 
 def test_all_service_handlers_have_command_or_file_registration():
@@ -942,7 +1123,7 @@ def test_document_message_downloads_temp_file_and_cleans_it(monkeypatch, tmp_pat
     asyncio.run(run_handler_and_background(document_message, update, context))
 
     assert update.effective_message.replies == ["Procesando documento..."]
-    assert context.bot.messages == [{"chat_id": 100, "text": "Documento analizado"}]
+    assert context.bot.messages[-1] == {"chat_id": 100, "text": "Documento analizado"}
     assert captured["service_name"] == "document"
     assert captured["original_name"] == "report.pdf"
     assert captured["exists_during_call"] is True
@@ -1122,7 +1303,7 @@ def test_photo_message_downloads_largest_variant(monkeypatch):
     asyncio.run(run_handler_and_background(photo_message, update, context))
 
     assert update.effective_message.replies == ["Procesando imagen..."]
-    assert context.bot.messages == [{"chat_id": 100, "text": "Imagen analizada"}]
+    assert context.bot.messages[-1] == {"chat_id": 100, "text": "Imagen analizada"}
     assert captured["service_name"] == "image"
     assert captured["original_name"] == "telegram_photo.jpg"
     assert captured["payload"] == b"\xff\xd8\xff\xe0jpeg"

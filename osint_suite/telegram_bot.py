@@ -16,6 +16,7 @@ import os
 import tempfile
 import time
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -39,6 +40,7 @@ from .telegram_osint import TelegramOSINTPool, pool_from_env
 
 
 logger = logging.getLogger(__name__)
+_WORKER_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="osint_suite_bot")
 
 
 @dataclass
@@ -47,7 +49,7 @@ class TelegramBotConfig:
     allowed_users: set[int]
     rate_limit_per_minute: int = 5
     rate_limit_per_hour: int = 20
-    long_job_threshold_seconds: int = 5
+    long_job_threshold_seconds: int = 10
     max_concurrent_jobs: int = 1
     result_file_threshold_bytes: int = 2500
     max_upload_size_bytes: int = 10 * 1024 * 1024
@@ -75,7 +77,7 @@ class TelegramBotConfig:
             allowed_users=allowed_users,
             rate_limit_per_minute=int(os.environ.get("TELEGRAM_RATE_LIMIT_PER_MINUTE", "5")),
             rate_limit_per_hour=int(os.environ.get("TELEGRAM_RATE_LIMIT_PER_HOUR", "20")),
-            long_job_threshold_seconds=int(os.environ.get("TELEGRAM_LONG_JOB_THRESHOLD_SECONDS", "5")),
+            long_job_threshold_seconds=int(os.environ.get("TELEGRAM_LONG_JOB_THRESHOLD_SECONDS", "10")),
             max_concurrent_jobs=int(os.environ.get("TELEGRAM_MAX_CONCURRENT_JOBS", "1")),
             result_file_threshold_bytes=int(os.environ.get("TELEGRAM_RESULT_FILE_THRESHOLD_BYTES", "2500")),
             max_upload_size_bytes=default_limit,
@@ -147,6 +149,8 @@ HELP_TEXT = (
     "/breach <email|usuario> - Si envias un email, analiza riesgo; Si envias un usuario, revisa fuentes de brechas\n"
     "/tg <username> - Lookup de usuario de Telegram via MTProto\n"
     "/tggroup <username> - Lookup de grupo o canal de Telegram via MTProto\n"
+    "/tginfo <username> - Recon enriquecido de usuario de Telegram via MTProto\n"
+    "/tggroupinfo <username> - Recon enriquecido de grupo o canal de Telegram via MTProto\n"
     "\n"
     "Archivos:\n"
     "Documento/PDF - extrae metadatos y analisis de documento\n"
@@ -199,6 +203,8 @@ def create_application(config: TelegramBotConfig) -> Application:
     application.add_handler(CommandHandler("breach", breach_command))
     application.add_handler(CommandHandler("tg", tg_command))
     application.add_handler(CommandHandler("tggroup", tggroup_command))
+    application.add_handler(CommandHandler("tginfo", tginfo_command))
+    application.add_handler(CommandHandler("tggroupinfo", tggroupinfo_command))
     application.add_handler(MessageHandler(filters.Document.ALL, document_message))
     application.add_handler(MessageHandler(filters.PHOTO, photo_message))
     return application
@@ -254,6 +260,14 @@ async def tg_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def tggroup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await execute_osint_command(update, context, "tggroup", "Uso: /tggroup <username>")
+
+
+async def tginfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await execute_osint_command(update, context, "tginfo", "Uso: /tginfo <username>")
+
+
+async def tggroupinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await execute_osint_command(update, context, "tggroupinfo", "Uso: /tggroupinfo <username>")
 
 
 async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -383,6 +397,161 @@ def record_abuse_signal(
     )
 
 
+def build_flag_list(data: dict[str, object], keys: list[tuple[str, str]]) -> list[str]:
+    flags = []
+    for field_name, label in keys:
+        if data.get(field_name):
+            flags.append(label)
+    return flags
+
+
+def build_tg_summary(data: dict[str, object], username: str) -> CommandResult:
+    full_name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or "sin nombre"
+    flags = build_flag_list(
+        data,
+        [
+            ("verified", "verificado"),
+            ("bot", "bot"),
+            ("restricted", "restringido"),
+            ("scam", "SCAM"),
+            ("fake", "FAKE"),
+            ("deleted", "eliminado"),
+        ],
+    )
+    flag_str = ", ".join(flags) if flags else "ninguno"
+    phone = data.get("phone") or "oculto"
+    bio = data.get("bio") or "sin bio"
+    summary = (
+        f"Perfil Telegram @{data.get('username') or username}\n"
+        f"- ID: {data['id']}\n"
+        f"- Nombre: {full_name}\n"
+        f"- Bio: {bio}\n"
+        f"- Telefono: {phone}\n"
+        f"- Flags: {flag_str}"
+    )
+    return CommandResult(
+        summary=summary,
+        payload=data,
+        filename_prefix=f"tg_{username}",
+    )
+
+
+def build_tggroup_summary(data: dict[str, object], username: str) -> CommandResult:
+    kind = "canal" if data.get("broadcast") else "supergrupo" if data.get("megagroup") else "grupo"
+    members = data.get("participants_count")
+    members_str = str(members) if members is not None else "desconocido"
+    flags = build_flag_list(
+        data,
+        [
+            ("verified", "verificado"),
+            ("scam", "SCAM"),
+            ("fake", "FAKE"),
+            ("restricted", "restringido"),
+        ],
+    )
+    flag_str = ", ".join(flags) if flags else "ninguno"
+    desc = data.get("description") or "sin descripcion"
+    summary = (
+        f"Telegram {kind} @{data.get('username') or username}\n"
+        f"- ID: {data['id']}\n"
+        f"- Titulo: {data.get('title', '')}\n"
+        f"- Descripcion: {desc}\n"
+        f"- Miembros: {members_str}\n"
+        f"- Tipo: {kind}\n"
+        f"- Flags: {flag_str}\n"
+        f"- Creado: {data.get('date', 'desconocido')}"
+    )
+    return CommandResult(
+        summary=summary,
+        payload=data,
+        filename_prefix=f"tggroup_{username}",
+    )
+
+
+def build_tginfo_summary(data: dict[str, object], username: str) -> CommandResult:
+    flags = build_flag_list(
+        data,
+        [
+            ("verified", "verificado"),
+            ("bot", "bot"),
+            ("premium", "premium"),
+            ("restricted", "restringido"),
+            ("scam", "SCAM"),
+            ("fake", "FAKE"),
+            ("deleted", "eliminado"),
+        ],
+    )
+    flag_str = ", ".join(flags) if flags else "ninguno"
+    bio = data.get("bio") or "sin bio"
+    public_usernames = ", ".join(data.get("public_usernames", []) or []) or "sin aliases"
+    common_chats = data.get("common_chats_count")
+    common_chats_str = str(common_chats) if common_chats is not None else "desconocido"
+    language = data.get("language_code") or "desconocido"
+    status_type = data.get("status_type") or "desconocido"
+    photo_data = data.get("profile_photo") or {}
+    photo_label = "si" if photo_data.get("has_photo") else "no"
+    summary = (
+        f"Recon Telegram usuario @{data.get('username') or username}\n"
+        f"- ID: {data['id']}\n"
+        f"- Nombre: {data.get('full_name') or 'sin nombre'}\n"
+        f"- Bio: {bio}\n"
+        f"- Telefono: {data.get('phone') or 'oculto'}\n"
+        f"- Estado: {status_type}\n"
+        f"- Idioma: {language}\n"
+        f"- Chats en comun: {common_chats_str}\n"
+        f"- Foto de perfil: {photo_label}\n"
+        f"- Usernames publicos: {public_usernames}\n"
+        f"- Flags: {flag_str}"
+    )
+    return CommandResult(
+        summary=summary,
+        payload=data,
+        filename_prefix=f"tginfo_{username}",
+    )
+
+
+def build_tggroupinfo_summary(data: dict[str, object], username: str) -> CommandResult:
+    members = data.get("participants_count")
+    members_str = str(members) if members is not None else "desconocido"
+    flags = build_flag_list(
+        data,
+        [
+            ("verified", "verificado"),
+            ("forum", "foro"),
+            ("join_request", "join_request"),
+            ("join_to_send", "join_to_send"),
+            ("restricted", "restringido"),
+            ("scam", "SCAM"),
+            ("fake", "FAKE"),
+        ],
+    )
+    flag_str = ", ".join(flags) if flags else "ninguno"
+    public_usernames = ", ".join(data.get("public_usernames", []) or []) or "sin aliases"
+    linked_chat_id = data.get("linked_chat_id") or "sin enlace"
+    slowmode = data.get("slowmode_seconds")
+    slowmode_str = str(slowmode) if slowmode is not None else "desactivado"
+    photo_data = data.get("chat_photo") or {}
+    photo_label = "si" if photo_data.get("has_photo") else "no"
+    summary = (
+        f"Recon Telegram {data.get('type_label') or 'grupo'} @{data.get('username') or username}\n"
+        f"- ID: {data['id']}\n"
+        f"- Titulo: {data.get('title', '')}\n"
+        f"- Descripcion: {data.get('description') or 'sin descripcion'}\n"
+        f"- Miembros: {members_str}\n"
+        f"- Tipo: {data.get('type_label') or 'desconocido'}\n"
+        f"- Usernames publicos: {public_usernames}\n"
+        f"- Chat enlazado: {linked_chat_id}\n"
+        f"- Slowmode: {slowmode_str}\n"
+        f"- Foto: {photo_label}\n"
+        f"- Flags: {flag_str}"
+    )
+    return CommandResult(
+        summary=summary,
+        payload=data,
+        filename_prefix=f"tggroupinfo_{username}",
+    )
+
+
 async def execute_osint_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -426,67 +595,16 @@ async def execute_osint_command(
     try:
         if command == "tg":
             data = await pool.lookup_user(username)
-            full_name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or "sin nombre"
-            flags = []
-            if data.get("verified"):
-                flags.append("verificado")
-            if data.get("bot"):
-                flags.append("bot")
-            if data.get("restricted"):
-                flags.append("restringido")
-            if data.get("scam"):
-                flags.append("SCAM")
-            if data.get("fake"):
-                flags.append("FAKE")
-            if data.get("deleted"):
-                flags.append("eliminado")
-            flag_str = ", ".join(flags) if flags else "ninguno"
-            phone = data.get("phone") or "oculto"
-            bio = data.get("bio") or "sin bio"
-            summary = (
-                f"Perfil Telegram @{data.get('username') or username}\n"
-                f"- ID: {data['id']}\n"
-                f"- Nombre: {full_name}\n"
-                f"- Bio: {bio}\n"
-                f"- Telefono: {phone}\n"
-                f"- Flags: {flag_str}"
-            )
-            result = CommandResult(
-                summary=summary,
-                payload=data,
-                filename_prefix=f"tg_{username}",
-            )
-        else:
+            result = build_tg_summary(data, username)
+        elif command == "tggroup":
             data = await pool.lookup_channel(username)
-            kind = "canal" if data.get("broadcast") else "supergrupo" if data.get("megagroup") else "grupo"
-            members = data.get("participants_count")
-            members_str = str(members) if members is not None else "desconocido"
-            flags = []
-            if data.get("verified"):
-                flags.append("verificado")
-            if data.get("scam"):
-                flags.append("SCAM")
-            if data.get("fake"):
-                flags.append("FAKE")
-            if data.get("restricted"):
-                flags.append("restringido")
-            flag_str = ", ".join(flags) if flags else "ninguno"
-            desc = data.get("description") or "sin descripcion"
-            summary = (
-                f"Telegram {kind} @{data.get('username') or username}\n"
-                f"- ID: {data['id']}\n"
-                f"- Titulo: {data.get('title', '')}\n"
-                f"- Descripcion: {desc}\n"
-                f"- Miembros: {members_str}\n"
-                f"- Tipo: {kind}\n"
-                f"- Flags: {flag_str}\n"
-                f"- Creado: {data.get('date', 'desconocido')}"
-            )
-            result = CommandResult(
-                summary=summary,
-                payload=data,
-                filename_prefix=f"tggroup_{username}",
-            )
+            result = build_tggroup_summary(data, username)
+        elif command == "tginfo":
+            data = await pool.lookup_user_info(username)
+            result = build_tginfo_summary(data, username)
+        else:
+            data = await pool.lookup_channel_info(username)
+            result = build_tggroupinfo_summary(data, username)
 
         logger.info(
             "Telegram OSINT command completed",
@@ -614,8 +732,10 @@ async def run_command_job(
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         start = time.perf_counter()
-        result = await asyncio.wait_for(
-            asyncio.to_thread(call_service, service_name, raw_arguments),
+        result = await run_blocking_in_worker(
+            call_service,
+            service_name,
+            raw_arguments,
             timeout=config.analysis_timeout_seconds,
         )
         elapsed = time.perf_counter() - start
@@ -758,17 +878,20 @@ async def run_file_job(
         temp_path = await download_file_to_temp_path(context, file_id, original_name)
         validate_file_signature(service_name, temp_path, original_name)
         start = time.perf_counter()
-        result = await asyncio.wait_for(
-            asyncio.to_thread(
-                call_file_service,
-                service_name,
-                temp_path,
-                original_name,
-                file_size=file_size,
-                max_upload_size_bytes=max_upload_size_bytes,
-                mime_type=mime_type,
-            ),
+        call_kwargs = {}
+        if file_size is not None:
+            call_kwargs["file_size"] = file_size
+        if max_upload_size_bytes is not None:
+            call_kwargs["max_upload_size_bytes"] = max_upload_size_bytes
+        if mime_type is not None:
+            call_kwargs["mime_type"] = mime_type
+        result = await run_blocking_in_worker(
+            call_file_service,
+            service_name,
+            temp_path,
+            original_name,
             timeout=config.analysis_timeout_seconds,
+            **call_kwargs,
         )
         elapsed = time.perf_counter() - start
         logger.info(
@@ -832,6 +955,19 @@ async def run_file_job(
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
         limiter.release_job_slot(user_id)
+
+
+async def run_blocking_in_worker(
+    func,
+    *args,
+    timeout: float,
+    **kwargs,
+):
+    loop = asyncio.get_running_loop()
+    return await asyncio.wait_for(
+        loop.run_in_executor(_WORKER_EXECUTOR, lambda: func(*args, **kwargs)),
+        timeout=timeout,
+    )
 
 
 async def send_command_result(

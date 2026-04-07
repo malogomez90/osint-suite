@@ -119,6 +119,45 @@ def validate_required_text(service_name: str, value: str) -> str:
     return normalized
 
 
+def normalize_service_value(service_name: str, value: str) -> str:
+    normalized = validate_required_text(service_name, value)
+    if service_name in {"username", "social"}:
+        return normalized.lstrip("@")
+    if service_name == "email":
+        return normalized.lower()
+    if service_name == "breach":
+        if "@" in normalized:
+            return normalized.lower()
+        return normalized.lstrip("@")
+    if service_name == "geo":
+        compact = re.sub(r"\s+", " ", normalized)
+        return compact.replace(" ,", ",").replace(", ", ", ")
+    return normalized
+
+
+def extract_option_value(args: Sequence[str], option_name: str, service_name: str) -> tuple[list[str], str | None]:
+    parts = [arg.strip() for arg in args if arg and arg.strip()]
+    option_value = None
+    remaining: list[str] = []
+    index = 0
+
+    while index < len(parts):
+        part = parts[index]
+        if part == option_name:
+            if option_value is not None or index + 1 >= len(parts):
+                raise usage_error(service_name)
+            candidate = parts[index + 1].strip()
+            if not candidate or candidate.startswith("--"):
+                raise usage_error(service_name)
+            option_value = candidate
+            index += 2
+            continue
+        remaining.append(part)
+        index += 1
+
+    return remaining, option_value
+
+
 def execute_capability(handler: Callable[..., CommandResult], *args: Any, **kwargs: Any) -> CommandResult:
     try:
         return handler(*args, **kwargs)
@@ -235,15 +274,21 @@ def run_geo_lookup(coords_input: str) -> CommandResult:
 def run_social_lookup(username: str) -> CommandResult:
     analyzer = SocialMediaAnalyzer(delay=0.2)
     results = analyzer.cross_reference(username)
+    profiles_found = results.get("profiles_found", [])
+    profile_lines = "\n".join(
+        f"  • {p['platform']}: {p.get('profile_url', 'N/A')}" for p in profiles_found
+    )
     summary = format_summary(
         f"Analisis social @{results['username']}",
         [
             ("Plataformas revisadas", len(results.get("platforms_checked", []))),
-            ("Perfiles encontrados", len(results.get("profiles_found", []))),
+            ("Perfiles encontrados", len(profiles_found)),
             ("No encontrados", len(results.get("profiles_not_found", []))),
             ("Cross-references", len(results.get("cross_references", []))),
         ],
     )
+    if profile_lines:
+        summary += f"\n\nPerfiles:\n{profile_lines}"
     return CommandResult(summary=summary, payload=results, filename_prefix=f"social_{results['username']}")
 
 
@@ -463,12 +508,11 @@ def dispatch_file_service(
 
 def dispatch_phone_service(args: Sequence[str]) -> CommandResult:
     region = "US"
-    phone_parts = list(args)
-    if len(phone_parts) >= 2 and phone_parts[0] == "--region":
-        region = phone_parts[1].upper()
-        phone_parts = phone_parts[2:]
-    elif phone_parts and phone_parts[0].startswith("--"):
+    if "--region" in args and (not args or args[0] != "--region"):
         raise usage_error("phone")
+    phone_parts, option_region = extract_option_value(args, "--region", "phone")
+    if option_region is not None:
+        region = option_region.upper()
     if any(part.startswith("--") for part in phone_parts):
         raise usage_error("phone")
     if not phone_parts:
@@ -478,12 +522,11 @@ def dispatch_phone_service(args: Sequence[str]) -> CommandResult:
 
 def dispatch_company_service(args: Sequence[str]) -> CommandResult:
     country_code = None
-    company_parts = list(args)
-    if len(company_parts) >= 2 and company_parts[0] == "--country":
-        country_code = company_parts[1].upper()
-        company_parts = company_parts[2:]
-    elif company_parts and company_parts[0].startswith("--"):
+    if "--country" in args and (not args or args[0] != "--country"):
         raise usage_error("company")
+    company_parts, option_country = extract_option_value(args, "--country", "company")
+    if option_country is not None:
+        country_code = option_country.upper()
     if any(part.startswith("--") for part in company_parts):
         raise usage_error("company")
     if not company_parts:
@@ -492,6 +535,7 @@ def dispatch_company_service(args: Sequence[str]) -> CommandResult:
 
 
 def dispatch_value_service(service_name: str, value: str) -> CommandResult:
+    value = normalize_service_value(service_name, value)
     if service_name == "email" and not EMAIL_PATTERN.match(value):
         raise invalid_argument_error()
     if service_name == "geo" and "," not in value:

@@ -22,12 +22,13 @@ import logging
 import os
 import random
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 try:
     from telethon import TelegramClient
+    from telethon import functions
     from telethon.errors import (
         ChannelPrivateError,
         FloodWaitError,
@@ -263,6 +264,79 @@ class TelegramOSINTPool:
         )
         return result
 
+    async def lookup_user_info(self, username: str) -> Dict[str, Any]:
+        """
+        Extended public recon for a Telegram user.
+
+        Keeps the lightweight lookup contract intact while adding extra public
+        metadata when MTProto exposes it safely in read-only mode.
+        """
+        username = username.lstrip("@").strip()
+        if not username:
+            raise ValueError("Username de Telegram invalido.")
+
+        cache_key = f"user_info:{username.lower()}"
+        cached = self._get_cached_result(cache_key)
+        if cached is not None:
+            logger.info("Telegram user recon (cache hit)", extra={"username": username})
+            return cached
+
+        entity = await self._resolve_entity(username)
+
+        if _TELETHON_AVAILABLE and isinstance(entity, (Channel, Chat)):
+            raise ValueError(
+                "Ese username corresponde a un grupo o canal. Usa /tggroupinfo."
+            )
+        if _TELETHON_AVAILABLE and not isinstance(entity, User):
+            raise ValueError("Entidad no reconocida para este username.")
+
+        full_response = await self._fetch_full_user(entity, username)
+        full_user = getattr(full_response, "full_user", None) if full_response is not None else None
+        result = _extract_user_info(entity)
+        result.update(_extract_user_recon_info(entity, full_user))
+        self._cache_result(cache_key, result)
+        logger.info(
+            "Telegram user recon completed",
+            extra={"username": username, "outcome": "success"},
+        )
+        return result
+
+    async def lookup_channel_info(self, username: str) -> Dict[str, Any]:
+        """
+        Extended public recon for a Telegram channel or group.
+
+        Adds public entity signals without reading messages or members.
+        """
+        username = username.lstrip("@").strip()
+        if not username:
+            raise ValueError("Username de Telegram invalido.")
+
+        cache_key = f"channel_info:{username.lower()}"
+        cached = self._get_cached_result(cache_key)
+        if cached is not None:
+            logger.info("Telegram channel recon (cache hit)", extra={"username": username})
+            return cached
+
+        entity = await self._resolve_entity(username, expect_channel=True)
+
+        if _TELETHON_AVAILABLE and isinstance(entity, User):
+            raise ValueError(
+                "Ese username corresponde a un usuario. Usa /tginfo."
+            )
+        if _TELETHON_AVAILABLE and not isinstance(entity, (Channel, Chat)):
+            raise ValueError("Entidad no reconocida para este username.")
+
+        full_response = await self._fetch_full_channel(entity, username)
+        full_chat = getattr(full_response, "full_chat", None) if full_response is not None else None
+        result = _extract_channel_info(entity)
+        result.update(_extract_channel_recon_info(entity, full_chat))
+        self._cache_result(cache_key, result)
+        logger.info(
+            "Telegram channel recon completed",
+            extra={"username": username, "outcome": "success"},
+        )
+        return result
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -295,6 +369,74 @@ class TelegramOSINTPool:
             if state is not exclude and state.client and state.can_make_request(now):
                 return state
         return None
+
+    async def _run_read_query(
+        self,
+        *,
+        target: str,
+        invalid_message: str,
+        query: Callable[[Any], Awaitable[Any]],
+        private_message: str | None = None,
+    ) -> Any:
+        state = self._pick_session()
+        if state is None:
+            raise _all_sessions_unavailable()
+
+        async with state.lock:
+            await asyncio.sleep(random.uniform(_MIN_DELAY_SECONDS, _MAX_DELAY_SECONDS))
+            state.record_request(time.monotonic())
+            try:
+                return await query(state.client)
+            except FloodWaitError as exc:
+                state.set_flood_wait(exc.seconds, time.monotonic())
+                logger.warning(
+                    "FloodWaitError — rotating to fallback session",
+                    extra={"target": target, "wait_seconds": exc.seconds},
+                )
+            except (UsernameInvalidError, UsernameNotOccupiedError):
+                raise ValueError(invalid_message)
+            except ChannelPrivateError:
+                raise ValueError(private_message or "Este canal o grupo es privado y no es accesible.")
+            except UserDeactivatedError:
+                raise ValueError("Esta cuenta de Telegram ha sido eliminada.")
+
+        fallback = self._pick_fallback_session(exclude=state)
+        if fallback is None:
+            raise _all_sessions_unavailable()
+
+        async with fallback.lock:
+            await asyncio.sleep(random.uniform(_MIN_DELAY_SECONDS, _MAX_DELAY_SECONDS))
+            fallback.record_request(time.monotonic())
+            try:
+                return await query(fallback.client)
+            except FloodWaitError as exc:
+                fallback.set_flood_wait(exc.seconds, time.monotonic())
+                raise _all_sessions_unavailable()
+            except (UsernameInvalidError, UsernameNotOccupiedError):
+                raise ValueError(invalid_message)
+            except ChannelPrivateError:
+                raise ValueError(private_message or "Este canal o grupo es privado y no es accesible.")
+            except UserDeactivatedError:
+                raise ValueError("Esta cuenta de Telegram ha sido eliminada.")
+
+    async def _fetch_full_user(self, entity: Any, username: str) -> Any:
+        if not _TELETHON_AVAILABLE:
+            return None
+        return await self._run_read_query(
+            target=username,
+            invalid_message="Usuario de Telegram no encontrado o username invalido.",
+            query=lambda client: client(functions.users.GetFullUserRequest(id=entity)),
+        )
+
+    async def _fetch_full_channel(self, entity: Any, username: str) -> Any:
+        if not _TELETHON_AVAILABLE:
+            return None
+        return await self._run_read_query(
+            target=username,
+            invalid_message="Grupo o canal no encontrado o username invalido.",
+            private_message="Este canal o grupo es privado y no es accesible.",
+            query=lambda client: client(functions.channels.GetFullChannelRequest(channel=entity)),
+        )
 
     async def _resolve_entity(
         self, username: str, expect_channel: bool = False
@@ -409,6 +551,30 @@ def _extract_user_info(user: Any) -> Dict[str, Any]:
     }
 
 
+def _extract_user_recon_info(user: Any, full_user: Any | None) -> Dict[str, Any]:
+    full_name = f"{getattr(user, 'first_name', '') or ''} {getattr(user, 'last_name', '') or ''}".strip() or None
+    photo = getattr(user, "photo", None)
+    status = getattr(user, "status", None)
+    return {
+        "full_name": full_name,
+        "language_code": getattr(user, "lang_code", None),
+        "premium": _optional_bool(user, "premium"),
+        "mutual_contact": _optional_bool(user, "mutual_contact"),
+        "contact": _optional_bool(user, "contact"),
+        "support": _optional_bool(user, "support"),
+        "status_type": type(status).__name__ if status is not None else None,
+        "profile_photo": {
+            "has_photo": photo is not None,
+            "photo_id": getattr(photo, "photo_id", None),
+            "dc_id": getattr(photo, "dc_id", None),
+        },
+        "public_usernames": _extract_public_usernames(user),
+        "common_chats_count": getattr(full_user, "common_chats_count", None),
+        "blocked": _optional_bool(full_user, "blocked"),
+        "settings_available": _optional_bool(full_user, "settings"),
+    }
+
+
 def _extract_channel_info(channel: Any) -> Dict[str, Any]:
     return {
         "id": channel.id,
@@ -424,6 +590,58 @@ def _extract_channel_info(channel: Any) -> Dict[str, Any]:
         "broadcast": bool(getattr(channel, "broadcast", False)),
         "date": str(getattr(channel, "date", None)),
     }
+
+
+def _extract_channel_recon_info(channel: Any, full_chat: Any | None) -> Dict[str, Any]:
+    chat_photo = getattr(channel, "photo", None)
+    location = getattr(full_chat, "location", None) if full_chat is not None else None
+    call = getattr(full_chat, "call", None) if full_chat is not None else None
+    return {
+        "type_label": "canal" if getattr(channel, "broadcast", False) else "supergrupo" if getattr(channel, "megagroup", False) else "grupo",
+        "forum": _optional_bool(channel, "forum"),
+        "gigagroup": _optional_bool(channel, "gigagroup"),
+        "join_to_send": _optional_bool(channel, "join_to_send"),
+        "join_request": _optional_bool(channel, "join_request"),
+        "noforwards": _optional_bool(channel, "noforwards"),
+        "participants_hidden": _optional_bool(channel, "participants_hidden"),
+        "public_usernames": _extract_public_usernames(channel),
+        "linked_chat_id": getattr(full_chat, "linked_chat_id", None),
+        "available_min_id": getattr(full_chat, "available_min_id", None),
+        "available_length": getattr(full_chat, "available_length", None),
+        "can_view_participants": _optional_bool(full_chat, "can_view_participants"),
+        "can_set_username": _optional_bool(full_chat, "can_set_username"),
+        "hidden_prehistory": _optional_bool(full_chat, "hidden_prehistory"),
+        "slowmode_seconds": getattr(full_chat, "slowmode_seconds", None),
+        "ttl_period": getattr(full_chat, "ttl_period", None),
+        "location": {
+            "available": location is not None,
+            "address": getattr(location, "address", None),
+        },
+        "chat_photo": {
+            "has_photo": chat_photo is not None,
+            "dc_id": getattr(chat_photo, "dc_id", None),
+        },
+        "call_active": call is not None,
+    }
+
+
+def _optional_bool(value: Any, attr: str) -> bool | None:
+    if value is None or not hasattr(value, attr):
+        return None
+    return bool(getattr(value, attr))
+
+
+def _extract_public_usernames(entity: Any) -> list[str]:
+    usernames = getattr(entity, "usernames", None) or []
+    results: list[str] = []
+    for item in usernames:
+        username = getattr(item, "username", None)
+        if username:
+            results.append(username)
+    primary_username = getattr(entity, "username", None)
+    if primary_username and primary_username not in results:
+        results.insert(0, primary_username)
+    return results
 
 
 def _all_sessions_unavailable() -> Exception:
