@@ -21,10 +21,11 @@ Active Loop
 
 Approved Task
 
-- _none_
+- _none_ (await Architect routing for the next approved slice)
 
 Last Outcome
 
+- Completed [A4](codex/status.md:24): [`tests/test_setup.py`](tests/test_setup.py) now compares normalized runtime dependency names from [`requirements.txt`](requirements.txt) against the evaluated [`install_requires`](setup.py:52) source in [`setup.py`](setup.py:31), ignoring version-pin differences while preserving the existing Phase A packaging smoke structure.
 - Completed [A3](codex/status.md:24): [`tests/test_setup.py`](tests/test_setup.py) now asserts editable-install package metadata version from [`importlib.metadata.version()`](importlib.metadata.version:1) matches the version declared through [`setup.py`](setup.py) package metadata.
 
 Debugger Fix
@@ -36,8 +37,6 @@ Loop Halt Reason
 _none_
 
 Next Queue
-
-- **[A4] requirements.txt ↔ setup.py alignment test** — add test: parse both files and assert no package present in one is absent from the other (name-level check, not version pinning).
 
 - **[D1] HIBP module** — create `osint_suite/hibp_checker.py`. Reads `HIBP_API_KEY` from env (optional). If key present: GET `https://haveibeenpwned.com/api/v3/breachedaccount/{email}?truncateResponse=false` with `hibp-api-key` header and `User-Agent: osint-suite`; return list of breach dicts (Name, Domain, BreachDate, PwnCount, DataClasses). If key absent: return `CommandResult` with summary `"HIBP no configurado — añade HIBP_API_KEY al entorno."` and empty payload. No crash, no partial result. Add `requests` call with 10s timeout. Add unit tests with mocked HTTP.
 - **[D2] Wire HIBP into `/breach` command** — in `osint_suite/telegram_services.py`, when `service_name == "breach"` and input looks like an email, call `hibp_checker.check_email(email)` in addition to existing `breach_checker`; merge results into one `CommandResult`. When input is a username (no `@`, no `.tld`), skip HIBP and use only existing breach_checker. Add HIBP_API_KEY to `codex/telegram_deployment_runbook.md` optional env vars list.
@@ -63,6 +62,7 @@ Completed
 - **[A1] Package importability test** — complete. Editable install smoke now asserts [`import osint_suite`](../osint_suite/__init__.py) succeeds without import-time crash.
 - **[A2] Entry point registration test** — complete. Editable install smoke now verifies declared `console_scripts` are registered in installed metadata entry points.
 - **[A3] Version alignment test** — complete. Editable install smoke now verifies installed [`importlib.metadata.version()`](importlib.metadata.version:1) matches the package version declared by [`setup.py`](setup.py).
+- **[A4] requirements.txt ↔ setup.py alignment test** — complete. Packaging smoke now compares normalized runtime dependency names from [`requirements.txt`](requirements.txt) with the evaluated [`install_requires`](setup.py:52) source in [`setup.py`](setup.py:31), ignoring version-pin differences.
 - **Phase A smoke** — basic `setup.py --name` smoke test exists and passes.
 - **Phase B** — complete. README documents codex hybrid model; contract phrases tested.
 - **Phase C** — complete. Telegram bot deployed and verified (2026-04-07, all 11 runbook steps).

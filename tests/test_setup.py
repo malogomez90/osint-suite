@@ -101,6 +101,47 @@ def load_declared_package_version(repo_root):
     raise AssertionError("setup.py does not declare a package version")
 
 
+def load_declared_install_requires_names(repo_root):
+    setup_contents = (repo_root / "setup.py").read_text(encoding="utf-8")
+    setup_ast = ast.parse(setup_contents)
+
+    for node in ast.walk(setup_ast):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "setup":
+            continue
+
+        for keyword in node.keywords:
+            if keyword.arg != "install_requires":
+                continue
+            if not isinstance(keyword.value, ast.Name):
+                raise AssertionError("setup.py install_requires must reference a requirements variable")
+
+            setup_call_index = next(
+                index
+                for index, candidate in enumerate(setup_ast.body)
+                if isinstance(candidate, ast.Expr)
+                and isinstance(candidate.value, ast.Call)
+                and isinstance(candidate.value.func, ast.Name)
+                and candidate.value.func.id == "setup"
+            )
+            module_before_setup = ast.Module(body=setup_ast.body[:setup_call_index], type_ignores=[])
+            namespace = {"__file__": str(repo_root / "setup.py")}
+            exec(compile(module_before_setup, str(repo_root / "setup.py"), "exec"), namespace)
+
+            requirements = namespace.get(keyword.value.id)
+            if not isinstance(requirements, list):
+                raise AssertionError("setup.py install_requires source must evaluate to a list")
+
+            return {
+                normalize_requirement(requirement)
+                for requirement in requirements
+                if isinstance(requirement, str)
+            }
+
+    raise AssertionError("setup.py does not declare install_requires")
+
+
 def test_setup_py_name_command_succeeds(repo_root):
     result = run_command(["python", "setup.py", "--name"], cwd=repo_root)
 
@@ -369,6 +410,13 @@ print("\\n".join(requirements))
             if line.strip()
         }
         assert installed_requirements == load_runtime_requirements(repo_root)
+
+
+def test_setup_py_install_requires_names_match_requirements_txt(repo_root):
+    requirements_names = {requirement.split("=", 1)[0] for requirement in load_runtime_requirements(repo_root)}
+    declared_names = {requirement.split("=", 1)[0] for requirement in load_declared_install_requires_names(repo_root)}
+
+    assert declared_names == requirements_names
 
 
 def test_non_editable_install_exposes_expected_console_scripts(repo_root):
