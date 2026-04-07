@@ -80,6 +80,27 @@ def load_declared_console_scripts(repo_root):
     raise AssertionError("setup.py does not declare console_scripts entry points")
 
 
+def load_declared_package_version(repo_root):
+    setup_contents = (repo_root / "setup.py").read_text(encoding="utf-8")
+    setup_ast = ast.parse(setup_contents)
+
+    for node in ast.walk(setup_ast):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "setup":
+            continue
+
+        for keyword in node.keywords:
+            if keyword.arg != "version":
+                continue
+            if not isinstance(keyword.value, ast.Name) or keyword.value.id != "__version__":
+                raise AssertionError("setup.py version must reference osint_suite.__version__")
+
+            return keyword.value.id
+
+    raise AssertionError("setup.py does not declare a package version")
+
+
 def test_setup_py_name_command_succeeds(repo_root):
     result = run_command(["python", "setup.py", "--name"], cwd=repo_root)
 
@@ -204,6 +225,25 @@ def test_setup_py_declares_python_compatibility_consistent_with_telegram_depende
     assert '"Programming Language :: Python :: 3.11"' in setup_contents
     assert '"Programming Language :: Python :: 3.7"' not in setup_contents
     assert '"Programming Language :: Python :: 3.8"' not in setup_contents
+
+
+def test_editable_install_version_matches_setup_declared_version(repo_root):
+    assert load_declared_package_version(repo_root) == "__version__"
+
+    with temporary_venv() as python_bin:
+        install_result = install_package(python_bin, repo_root, editable=True)
+        assert install_result.returncode == 0, install_result.stderr
+
+        version_check = """
+from importlib import metadata
+import osint_suite
+
+assert metadata.version("osint-suite") == osint_suite.__version__
+print(metadata.version("osint-suite"))
+"""
+        version_result = run_python_code(python_bin, version_check, cwd=repo_root)
+        assert version_result.returncode == 0, version_result.stderr
+        assert version_result.stdout.strip() == "1.0.0"
 
 
 @pytest.mark.parametrize("editable", [True, False], ids=["editable", "non_editable"])
