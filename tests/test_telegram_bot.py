@@ -283,7 +283,7 @@ def test_username_command_requires_argument():
 
     asyncio.run(username_command(update, context))
 
-    assert update.effective_message.replies == ["Uso: /username <valor>"]
+    assert update.effective_message.replies == ["Uso: /username <usuario>"]
 
 
 def test_username_command_replies_when_rate_limited():
@@ -313,9 +313,20 @@ def test_username_command_replies_when_job_slot_is_busy():
     ]
 
 
-def test_help_text_lists_social_and_breach_commands():
-    assert "/social <valor>" in HELP_TEXT
-    assert "/breach <valor>" in HELP_TEXT
+def test_help_text_describes_commands_and_uploads():
+    assert "/username <usuario>" in HELP_TEXT
+    assert "/email <email>" in HELP_TEXT
+    assert "/phone <numero> [--region XX]" in HELP_TEXT
+    assert "/company <nombre> [--country XX]" in HELP_TEXT
+    assert "/geo <lat, lon>" in HELP_TEXT
+    assert "/social <usuario>" in HELP_TEXT
+    assert "/breach <email|usuario>" in HELP_TEXT
+    assert "Busca presencia de un usuario en multiples plataformas" in HELP_TEXT
+    assert "Analiza perfiles sociales y referencias cruzadas" in HELP_TEXT
+    assert "Si envias un email" in HELP_TEXT
+    assert "Si envias un usuario" in HELP_TEXT
+    assert "Documento/PDF" in HELP_TEXT
+    assert "Imagen/foto" in HELP_TEXT
 
 
 def test_dispatch_service_supports_social_handler(monkeypatch):
@@ -349,7 +360,7 @@ def test_social_command_requires_argument():
 
     asyncio.run(telegram_bot_module.social_command(update, context))
 
-    assert update.effective_message.replies == ["Uso: /social <valor>"]
+    assert update.effective_message.replies == ["Uso: /social <usuario>"]
 
 
 def test_breach_command_requires_argument():
@@ -359,7 +370,7 @@ def test_breach_command_requires_argument():
 
     asyncio.run(telegram_bot_module.breach_command(update, context))
 
-    assert update.effective_message.replies == ["Uso: /breach <valor>"]
+    assert update.effective_message.replies == ["Uso: /breach <email|usuario>"]
 
 
 def test_send_command_result_attaches_json_when_payload_is_large():

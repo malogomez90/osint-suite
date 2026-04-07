@@ -159,15 +159,17 @@ class InMemoryRateLimiter:
 
 HELP_TEXT = (
     "Comandos disponibles:\n"
-    "/username <valor>\n"
-    "/email <valor>\n"
-    "/phone <numero>\n"
-    "/company <nombre>\n"
-    "/geo <lat, lon>\n"
-    "/social <valor>\n"
-    "/breach <valor>\n"
+    "/username <usuario> - Busca presencia de un usuario en multiples plataformas\n"
+    "/email <email> - Analiza validacion, dominio y recomendaciones\n"
+    "/phone <numero> [--region XX] - Analiza telefono con region opcional\n"
+    "/company <nombre> [--country XX] - Investiga empresa con pais opcional\n"
+    "/geo <lat, lon> - Analiza coordenadas geograficas\n"
+    "/social <usuario> - Analiza perfiles sociales y referencias cruzadas\n"
+    "/breach <email|usuario> - Si envias un email, analiza riesgo; Si envias un usuario, revisa fuentes de brechas\n"
     "\n"
-    "Tambien puedes enviar un PDF/documento Office o una imagen para analizar metadatos.\n"
+    "Archivos:\n"
+    "Documento/PDF - extrae metadatos y analisis de documento\n"
+    "Imagen/foto - extrae metadatos y riesgos de privacidad\n"
     "\n"
     "Uso publico con rate limiting por usuario."
 )
@@ -215,19 +217,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def username_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await execute_service_command(update, context, "username", "Uso: /username <valor>")
+    await execute_service_command(update, context, "username", "Uso: /username <usuario>")
 
 
 async def email_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await execute_service_command(update, context, "email", "Uso: /email <valor>")
+    await execute_service_command(update, context, "email", "Uso: /email <email>")
 
 
 async def phone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await execute_service_command(update, context, "phone", "Uso: /phone <numero>")
+    await execute_service_command(update, context, "phone", "Uso: /phone <numero> [--region XX]")
 
 
 async def company_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await execute_service_command(update, context, "company", "Uso: /company <nombre>")
+    await execute_service_command(update, context, "company", "Uso: /company <nombre> [--country XX]")
 
 
 async def geo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -235,11 +237,11 @@ async def geo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def social_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await execute_service_command(update, context, "social", "Uso: /social <valor>")
+    await execute_service_command(update, context, "social", "Uso: /social <usuario>")
 
 
 async def breach_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await execute_service_command(update, context, "breach", "Uso: /breach <valor>")
+    await execute_service_command(update, context, "breach", "Uso: /breach <email|usuario>")
 
 
 async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
