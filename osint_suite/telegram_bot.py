@@ -26,40 +26,18 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 from .telegram_services import (
     CommandResult,
+    ControlledServiceError,
     dispatch_file_service,
     dispatch_service,
+    validate_file_upload,
+    validate_file_signature,
     IMAGE_FORMATS,
     DOCUMENT_FORMATS,
     is_supported_document,
-    normalize_filename_prefix,
 )
 
 
 logger = logging.getLogger(__name__)
-
-
-DOCUMENT_MIME_TYPES = {
-    ".pdf": {"application/pdf"},
-    ".doc": {"application/msword", "application/x-tika-msoffice"},
-    ".docx": {
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/zip",
-    },
-    ".xls": {"application/vnd.ms-excel", "application/x-tika-msoffice"},
-    ".xlsx": {
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/zip",
-    },
-    ".ppt": {"application/vnd.ms-powerpoint", "application/x-tika-msoffice"},
-    ".pptx": {
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "application/zip",
-    },
-    ".odt": {"application/vnd.oasis.opendocument.text", "application/zip"},
-    ".ods": {"application/vnd.oasis.opendocument.spreadsheet", "application/zip"},
-    ".odp": {"application/vnd.oasis.opendocument.presentation", "application/zip"},
-    ".rtf": {"application/rtf", "text/rtf"},
-}
 
 
 @dataclass
@@ -252,27 +230,28 @@ async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await message.reply_text("No se recibio ningun documento.")
         return
     file_name = getattr(document, "file_name", "") or "document.bin"
-    if not is_supported_document(file_name):
-        await message.reply_text("Formato de documento no soportado. Envia PDF u Office/OpenDocument.")
-        return
     config: TelegramBotConfig = context.application.bot_data["config"]
     if not is_allowed_extension(file_name, config.allowed_document_extensions):
         record_abuse_signal(context, "upload_policy_denied", user_id, file_name, message.chat_id)
         await message.reply_text("Extension de documento no permitida por la politica actual.")
         return
-    if is_empty_file(getattr(document, "file_size", None)):
-        record_abuse_signal(context, "empty_upload_denied", user_id, file_name, message.chat_id)
-        await message.reply_text("Archivo vacio o sin contenido.")
-        return
-    if not is_allowed_document_mime_type(file_name, getattr(document, "mime_type", None)):
-        record_abuse_signal(context, "upload_validation_denied", user_id, file_name, message.chat_id)
-        await message.reply_text("Tipo MIME de documento no soportado para este archivo.")
-        return
-    if is_file_too_large(getattr(document, "file_size", None), config.max_document_upload_size_bytes):
-        record_abuse_signal(context, "upload_size_denied", user_id, file_name, message.chat_id)
-        await message.reply_text(
-            f"Archivo demasiado grande. Limite actual: {config.max_document_upload_size_bytes} bytes."
+    try:
+        validate_file_upload(
+            "document",
+            file_name,
+            file_size=getattr(document, "file_size", None),
+            max_upload_size_bytes=config.max_document_upload_size_bytes,
+            mime_type=getattr(document, "mime_type", None),
         )
+    except ValueError as exc:
+        reply_text = str(exc)
+        signal_name = "upload_validation_denied"
+        if reply_text == "Archivo vacio o sin contenido.":
+            signal_name = "empty_upload_denied"
+        elif reply_text.startswith("Archivo demasiado grande."):
+            signal_name = "upload_size_denied"
+        record_abuse_signal(context, signal_name, user_id, file_name, message.chat_id)
+        await message.reply_text(reply_text)
         return
     await execute_file_command(
         update=update,
@@ -280,6 +259,9 @@ async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         service_name="document",
         file_id=document.file_id,
         original_name=file_name,
+        file_size=getattr(document, "file_size", None),
+        mime_type=getattr(document, "mime_type", None),
+        max_upload_size_bytes=config.max_document_upload_size_bytes,
         processing_text="Procesando documento...",
     )
 
@@ -297,15 +279,22 @@ async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         record_abuse_signal(context, "upload_policy_denied", user_id, "telegram_photo.jpg", message.chat_id)
         await message.reply_text("Extension de imagen no permitida por la politica actual.")
         return
-    if is_empty_file(getattr(largest_photo, "file_size", None)):
-        record_abuse_signal(context, "empty_upload_denied", user_id, "telegram_photo.jpg", message.chat_id)
-        await message.reply_text("Archivo vacio o sin contenido.")
-        return
-    if is_file_too_large(getattr(largest_photo, "file_size", None), config.max_image_upload_size_bytes):
-        record_abuse_signal(context, "upload_size_denied", user_id, "telegram_photo.jpg", message.chat_id)
-        await message.reply_text(
-            f"Archivo demasiado grande. Limite actual: {config.max_image_upload_size_bytes} bytes."
+    try:
+        validate_file_upload(
+            "image",
+            "telegram_photo.jpg",
+            file_size=getattr(largest_photo, "file_size", None),
+            max_upload_size_bytes=config.max_image_upload_size_bytes,
         )
+    except ValueError as exc:
+        reply_text = str(exc)
+        signal_name = "upload_validation_denied"
+        if reply_text == "Archivo vacio o sin contenido.":
+            signal_name = "empty_upload_denied"
+        elif reply_text.startswith("Archivo demasiado grande."):
+            signal_name = "upload_size_denied"
+        record_abuse_signal(context, signal_name, user_id, "telegram_photo.jpg", message.chat_id)
+        await message.reply_text(reply_text)
         return
     await execute_file_command(
         update=update,
@@ -313,25 +302,10 @@ async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         service_name="image",
         file_id=largest_photo.file_id,
         original_name="telegram_photo.jpg",
+        file_size=getattr(largest_photo, "file_size", None),
+        max_upload_size_bytes=config.max_image_upload_size_bytes,
         processing_text="Procesando imagen...",
     )
-
-
-def is_file_too_large(file_size: int | None, max_upload_size_bytes: int) -> bool:
-    return file_size is not None and file_size > max_upload_size_bytes
-
-
-def is_empty_file(file_size: int | None) -> bool:
-    return file_size is not None and file_size <= 0
-
-
-def is_allowed_document_mime_type(file_name: str, mime_type: str | None) -> bool:
-    if not mime_type:
-        return True
-    allowed = DOCUMENT_MIME_TYPES.get(Path(file_name).suffix.lower())
-    if not allowed:
-        return True
-    return mime_type in allowed
 
 
 def parse_allowed_extensions(raw_value: str | None, default_extensions: Sequence[str]) -> set[str]:
@@ -373,49 +347,6 @@ def record_abuse_signal(
             "outcome": "abuse_signal",
         },
     )
-
-
-def validate_downloaded_upload(service_name: str, temp_path: str, original_name: str) -> None:
-    with open(temp_path, "rb") as handle:
-        header = handle.read(16)
-
-    if not header:
-        raise ValueError("Archivo vacio o sin contenido.")
-
-    if service_name == "document" and not is_valid_document_signature(original_name, header):
-        raise ValueError("Archivo corrupto o no coincide con el tipo esperado.")
-    if service_name == "image" and not is_valid_image_signature(original_name, header):
-        raise ValueError("Archivo corrupto o no coincide con el tipo esperado.")
-
-
-def is_valid_document_signature(file_name: str, header: bytes) -> bool:
-    suffix = Path(file_name).suffix.lower()
-    if suffix == ".pdf":
-        return header.startswith(b"%PDF")
-    if suffix in {".doc", ".xls", ".ppt"}:
-        return header.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
-    if suffix in {".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp"}:
-        return header.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"))
-    if suffix == ".rtf":
-        return header.startswith(b"{\\rtf")
-    return True
-
-
-def is_valid_image_signature(file_name: str, header: bytes) -> bool:
-    suffix = Path(file_name).suffix.lower()
-    if suffix in {".jpg", ".jpeg"}:
-        return header.startswith(b"\xff\xd8\xff")
-    if suffix == ".png":
-        return header.startswith(b"\x89PNG\r\n\x1a\n")
-    if suffix == ".gif":
-        return header.startswith((b"GIF87a", b"GIF89a"))
-    if suffix == ".bmp":
-        return header.startswith(b"BM")
-    if suffix in {".tif", ".tiff"}:
-        return header.startswith((b"II*\x00", b"MM\x00*"))
-    if suffix == ".webp":
-        return header.startswith(b"RIFF") and header[8:12] == b"WEBP"
-    return True
 
 
 async def execute_service_command(
@@ -469,6 +400,9 @@ async def execute_file_command(
     file_id: str,
     original_name: str,
     processing_text: str,
+    file_size: int | None,
+    max_upload_size_bytes: int,
+    mime_type: str | None = None,
 ) -> None:
     if not await ensure_user_allowed(update, context):
         return
@@ -497,6 +431,9 @@ async def execute_file_command(
             service_name=service_name,
             file_id=file_id,
             original_name=original_name,
+            file_size=file_size,
+            max_upload_size_bytes=max_upload_size_bytes,
+            mime_type=mime_type,
             long_job_threshold_seconds=config.long_job_threshold_seconds,
         )
     )
@@ -537,12 +474,22 @@ async def run_command_job(
                 "Long Telegram job completed",
                 extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "success"},
             )
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="La solicitud tardo mas de lo habitual. Resultado listo.",
+            )
         await send_command_result(context, chat_id, result)
     except ValueError as exc:
         record_abuse_signal(context, "command_validation_denied", user_id, service_name, chat_id)
         logger.info(
             "Telegram command validation failed",
             extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "validation"},
+        )
+        await context.bot.send_message(chat_id=chat_id, text=str(exc))
+    except ControlledServiceError as exc:
+        logger.warning(
+            "Telegram command controlled failure",
+            extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "controlled_failure"},
         )
         await context.bot.send_message(chat_id=chat_id, text=str(exc))
     except asyncio.TimeoutError:
@@ -577,8 +524,23 @@ def call_service(service_name: str, raw_arguments: list[str]) -> CommandResult:
     return dispatch_service(service_name, raw_arguments)
 
 
-def call_file_service(service_name: str, file_path: str, original_name: str) -> CommandResult:
-    return dispatch_file_service(service_name, file_path, original_name)
+def call_file_service(
+    service_name: str,
+    file_path: str,
+    original_name: str,
+    *,
+    file_size: int | None = None,
+    max_upload_size_bytes: int | None = None,
+    mime_type: str | None = None,
+) -> CommandResult:
+    return dispatch_file_service(
+        service_name,
+        file_path,
+        original_name,
+        file_size=file_size,
+        max_upload_size_bytes=max_upload_size_bytes,
+        mime_type=mime_type,
+    )
 
 
 def split_text_chunks(text: str, max_chunk_length: int = 3500) -> list[str]:
@@ -624,6 +586,9 @@ async def run_file_job(
     file_id: str,
     original_name: str,
     long_job_threshold_seconds: int,
+    file_size: int | None = None,
+    max_upload_size_bytes: int | None = None,
+    mime_type: str | None = None,
 ) -> None:
     limiter: InMemoryRateLimiter = context.application.bot_data["rate_limiter"]
     config: TelegramBotConfig = context.application.bot_data["config"]
@@ -631,10 +596,18 @@ async def run_file_job(
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_DOCUMENT)
         temp_path = await download_file_to_temp_path(context, file_id, original_name)
-        validate_downloaded_upload(service_name, temp_path, original_name)
+        validate_file_signature(service_name, temp_path, original_name)
         start = time.perf_counter()
         result = await asyncio.wait_for(
-            asyncio.to_thread(call_file_service, service_name, temp_path, original_name),
+            asyncio.to_thread(
+                call_file_service,
+                service_name,
+                temp_path,
+                original_name,
+                file_size=file_size,
+                max_upload_size_bytes=max_upload_size_bytes,
+                mime_type=mime_type,
+            ),
             timeout=config.analysis_timeout_seconds,
         )
         elapsed = time.perf_counter() - start
@@ -653,12 +626,22 @@ async def run_file_job(
                 "Long Telegram file job completed",
                 extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "success"},
             )
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="La solicitud tardo mas de lo habitual. Resultado listo.",
+            )
         await send_command_result(context, chat_id, result)
     except ValueError as exc:
         record_abuse_signal(context, "file_validation_denied", user_id, service_name, chat_id)
         logger.info(
             "Telegram file validation failed",
             extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "validation"},
+        )
+        await context.bot.send_message(chat_id=chat_id, text=str(exc))
+    except ControlledServiceError as exc:
+        logger.warning(
+            "Telegram file controlled failure",
+            extra={"service": service_name, "user_id": user_id, "chat_id": chat_id, "outcome": "controlled_failure"},
         )
         await context.bot.send_message(chat_id=chat_id, text=str(exc))
     except asyncio.TimeoutError:
@@ -698,14 +681,13 @@ async def send_command_result(
 ) -> None:
     config: TelegramBotConfig = context.application.bot_data["config"]
     payload_bytes = json.dumps(result.payload, ensure_ascii=False, indent=2).encode("utf-8")
-    for chunk in split_text_chunks(result.summary):
+    for chunk in split_text_chunks(result.summary_text):
         await context.bot.send_message(chat_id=chat_id, text=chunk)
 
     if len(payload_bytes) >= config.result_file_threshold_bytes:
-        normalized_filename = f"{normalize_filename_prefix(result.filename_prefix)}.json"
         await context.bot.send_document(
             chat_id=chat_id,
-            document=InputFile(io.BytesIO(payload_bytes), filename=normalized_filename),
+            document=InputFile(io.BytesIO(payload_bytes), filename=result.json_filename),
             caption="Resultado completo en JSON.",
         )
 

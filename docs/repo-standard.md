@@ -135,17 +135,18 @@ These modules are clearly exposed through the current Telegram command/file flow
 - [`osint_suite/document_analyzer.py`](../osint_suite/document_analyzer.py)
 - [`osint_suite/image_metadata.py`](../osint_suite/image_metadata.py)
 
-### 7.2 Require classification
+### 7.2 Explicit classification decision
 
-These modules exist in the package but are not clearly exposed through the current Telegram interface and therefore require explicit classification in future planning:
+The following modules are implemented in the package and are already wired through the current Telegram command/service flow. For repository planning purposes, they are now classified as **Telegram-exposed capabilities** and remain in scope for the Phase C Telegram product surface:
 
-- [`osint_suite/social_analyzer.py`](../osint_suite/social_analyzer.py)
-- [`osint_suite/breach_checker.py`](../osint_suite/breach_checker.py)
+- [`osint_suite/social_analyzer.py`](../osint_suite/social_analyzer.py) via `/social`
+- [`osint_suite/breach_checker.py`](../osint_suite/breach_checker.py) via `/breach`
 
-For each unclassified module, maintainers must decide one of the following before expanding surrounding docs or interfaces:
-- expose through Telegram,
-- keep as package-only capability,
-- or deprecate.
+Maintainer interpretation:
+- keep both capabilities in the Telegram-first product surface,
+- keep orchestration and response shaping in [`osint_suite/telegram_services.py`](../osint_suite/telegram_services.py),
+- keep Telegram transport concerns in [`osint_suite/telegram_bot.py`](../osint_suite/telegram_bot.py),
+- do not treat these modules as package-only or deprecated unless a later approved planning decision explicitly changes that status.
 
 ## 8. Maintainer rule of interpretation
 

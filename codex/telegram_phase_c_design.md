@@ -33,11 +33,19 @@ Fuera de alcance en esta fase:
 - `/phone <valor>`: ejecuta investigación de teléfono.
 - `/company <valor>`: ejecuta investigación de empresa.
 - `/geo <lat,lon>`: ejecuta ayuda de geolocalización.
+- `/social <valor>`: ejecuta análisis social y referencias cruzadas.
+- `/breach <email|usuario>`: ejecuta análisis de brechas para email o username.
 
 Comandos diferidos para una iteración posterior:
 
 - `/document`, `/image` y otros flujos que requieran subida de archivos o parsing más costoso.
 - Comandos administrativos.
+
+Decisión explícita de producto para Fase C:
+
+- [`osint_suite/social_analyzer.py`](../osint_suite/social_analyzer.py) queda clasificado como capacidad **expuesta por Telegram** dentro de la superficie actual del bot.
+- [`osint_suite/breach_checker.py`](../osint_suite/breach_checker.py) queda clasificado como capacidad **expuesta por Telegram** dentro de la superficie actual del bot.
+- Ambos comandos forman parte de la superficie funcional vigente del bot y no deben tratarse como capacidades solo de paquete salvo decisión posterior aprobada.
 
 ## Arquitectura propuesta
 
@@ -108,6 +116,18 @@ Webhook queda fuera del MVP porque añade complejidad operativa innecesaria para
 - Mensajes de error legibles para el usuario y logs técnicos mínimos para operación.
 - No mostrar stack traces, rutas locales ni datos sensibles en el chat.
 
+Contrato aprobado para la superficie actual de Telegram en este slice de Fase C:
+
+- Cada capacidad expuesta por Telegram debe devolver [`CommandResult`](../osint_suite/telegram_services.py) como contrato único de salida.
+- [`CommandResult`](../osint_suite/telegram_services.py) conserva `summary`, `payload` y `filename_prefix` como datos base, pero la presentación de Telegram debe consumir el contrato normalizado derivado del propio objeto:
+  - `summary_text`: resumen textual saneado para chat.
+  - `json_filename`: nombre de adjunto JSON normalizado.
+- La capa de presentación debe aplicar el mismo contrato tanto en flujos de comando como en flujos de archivo.
+- Si el payload supera el umbral configurado, el bot debe mantener paridad de comportamiento: enviar el `summary_text` y adjuntar el JSON usando `json_filename`.
+- Si un job supera el umbral de larga duración, el bot debe añadir el mismo aviso corto antes del resultado final, con el mismo comportamiento para comandos y archivos.
+
+Para [`/social`](codex/telegram_phase_c_design.md) y [`/breach`](codex/telegram_phase_c_design.md), mantener el mismo patrón: resumen corto en chat y adjunto JSON cuando el payload completo exceda el umbral configurado.
+
 ## Manejo de errores
 
 Categorías:
@@ -116,6 +136,27 @@ Categorías:
 - Error de operación controlada: fallo esperado de una herramienta o dependencia. Respuesta corta y reintento manual por parte del usuario.
 - Error interno inesperado: mensaje genérico al usuario y log técnico sanitizado.
 - Error de saturación o rate limit: mensaje claro de espera.
+
+Contrato formalizado para la superficie actual de comandos de Telegram en este slice:
+
+- Los handlers deben seguir siendo finos: solo muestran el texto de uso cuando no existe ningún argumento y delegan el resto de validación a [`dispatch_service()`](../osint_suite/telegram_services.py).
+- La capa de servicios debe normalizar los errores de entrada con paridad entre capacidades expuestas:
+  - argumento ausente: `Solicitud invalida. Usa /comando ...`
+  - parámetro malformado: `Solicitud invalida. Revisa los parametros e intenta de nuevo.`
+  - combinación de flags no soportada: mismo mensaje de uso del comando correspondiente.
+- Los fallos esperados de herramientas o dependencias, cuando no son errores internos del bot sino fallos controlados de capacidad, deben exponerse con un único mensaje seguro para usuario: `No se pudo completar la solicitud con la capacidad solicitada. Reintenta mas tarde.`
+- La normalización anterior debe aplicar a toda la superficie actual de comandos expuestos por Telegram: `/username`, `/email`, `/phone`, `/company`, `/geo`, `/social` y `/breach`.
+
+Contrato formalizado para la superficie actual de subidas de archivos en este slice:
+
+- [`document_message()`](../osint_suite/telegram_bot.py:247) y [`photo_message()`](../osint_suite/telegram_bot.py:287) deben seguir siendo handlers finos: aplicar solo la política de extensiones permitidas y delegar la validación normalizada del archivo a la capa de servicio.
+- [`dispatch_file_service()`](../osint_suite/telegram_services.py:415) debe centralizar la validación normalizada de subidas para documento e imagen antes del análisis:
+  - tipo no soportado: mensaje específico del tipo de archivo
+  - archivo vacío: `Archivo vacio o sin contenido.`
+  - archivo sobredimensionado: `Archivo demasiado grande. Limite actual: <bytes> bytes.`
+  - firma corrupta o incompatible: `Archivo corrupto o no coincide con el tipo esperado.`
+- Los fallos controlados del analizador o extractor en flujos de archivo deben usar el mismo contrato seguro ya definido para comandos: `No se pudo completar la solicitud con la capacidad solicitada. Reintenta mas tarde.`
+- [`CommandResult`](../osint_suite/telegram_services.py:51) sigue siendo exclusivamente el contrato de salida en éxito; la normalización anterior cubre solo validación y fallos controlados previos a la presentación.
 
 ## Dependencias e integración
 
@@ -131,6 +172,14 @@ Antes de declarar la implementación como correcta:
 - Verificación de rate limiting por usuario.
 - Verificación de un caso de job largo con mensaje de "procesando...".
 - Verificación de envío de archivo JSON cuando el resultado exceda el tamaño razonable del chat.
+
+## Checkpoint operativo aprobado
+
+El siguiente checkpoint aprobado de Fase C no es una nueva capacidad funcional. Es la verificación en entorno real de los contratos ya aprobados para comandos y archivos.
+
+- La ejecución operativa debe seguir [`codex/telegram_deployment_runbook.md`](telegram_deployment_runbook.md) como fuente de verdad para live smoke y evidencia de operador.
+- El objetivo inmediato es probar paridad entre runbook y runtime real para arranque, `/start`, `/help`, éxito controlado, fallo controlado, adjuntos JSON, subida de documento, subida de imagen, rate limiting y logging saneado.
+- No abrir nueva expansión funcional de Telegram hasta cerrar este checkpoint o registrar un desajuste concreto de runtime.
 
 ## Recomendación final
 

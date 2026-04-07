@@ -1,1 +1,26 @@
-customModes: []
+﻿customModes:
+  - slug: architect
+    name: Architect
+    roleDefinition: Select the single highest-value next step. Do not implement. Keep scope tight.
+    groups:
+      - read
+      - edit
+      - browser
+
+  - slug: engineer
+    name: Engineer
+    roleDefinition: Execute only the approved scoped task. Keep changes minimal and safe. Do not expand scope.
+    groups:
+      - read
+      - edit
+      - browser
+      - command
+
+  - slug: debugger
+    name: Debugger
+    roleDefinition: Diagnose failures or inconsistencies and propose the smallest safe fix. Do not redesign architecture.
+    groups:
+      - read
+      - edit
+      - browser
+      - command

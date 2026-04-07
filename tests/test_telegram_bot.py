@@ -31,10 +31,13 @@ from osint_suite.telegram_bot import (
 from osint_suite.telegram_services import run_username_lookup
 from osint_suite.telegram_services import (
     CommandResult,
+    ControlledServiceError,
+    FileServiceError,
     format_summary,
     run_document_lookup,
     run_image_lookup,
     dispatch_service,
+    dispatch_file_service,
 )
 from osint_suite.document_analyzer import DocumentAnalyzer
 
@@ -519,6 +522,17 @@ def test_send_command_result_attaches_json_when_payload_is_large():
     assert context.bot.documents[0]["document"].filename == "user_name_john_doe.json"
 
 
+def test_command_result_exposes_normalized_contract_fields():
+    result = CommandResult(
+        summary="  Resumen consistente  ",
+        payload={"ok": True},
+        filename_prefix="User Name/John.Doe",
+    )
+
+    assert result.summary_text == "Resumen consistente"
+    assert result.json_filename == "user_name_john_doe.json"
+
+
 def test_send_command_result_chunks_long_summary_before_json_fallback():
     config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=1000)
     context = FakeContext(config)
@@ -551,6 +565,22 @@ def test_send_command_result_chunks_summary_and_still_attaches_json_for_large_pa
     assert len(context.bot.messages) >= 2
     assert len(context.bot.documents) == 1
     assert context.bot.documents[0]["document"].filename == "chunk_big.json"
+
+
+def test_send_command_result_uses_command_result_contract_for_summary_and_json():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=40)
+    context = FakeContext(config)
+    result = CommandResult(
+        summary="  Resumen por contrato  ",
+        payload={"data": "x" * 200},
+        filename_prefix="Result Contract",
+    )
+
+    asyncio.run(send_command_result(context, 100, result))
+
+    assert context.bot.messages == [{"chat_id": 100, "text": "Resumen por contrato"}]
+    assert len(context.bot.documents) == 1
+    assert context.bot.documents[0]["document"].filename == "result_contract.json"
 
 
 def test_format_summary_uses_bulleted_lines_for_scanability():
@@ -619,6 +649,35 @@ def test_run_command_job_logs_operator_facing_success_fields(monkeypatch, caplog
     assert success_record.elapsed_seconds >= 0
 
 
+def test_run_command_job_sends_long_job_notice_before_result(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    context = FakeContext(config)
+
+    def successful_call_service(service_name, raw_arguments):
+        return CommandResult(summary="Resumen largo", payload={}, filename_prefix="ok")
+
+    perf_counter_values = iter([10.0, 16.5])
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_service", successful_call_service)
+    monkeypatch.setattr("osint_suite.telegram_bot.time.perf_counter", lambda: next(perf_counter_values))
+
+    asyncio.run(
+        run_command_job(
+            context,
+            chat_id=100,
+            user_id=42,
+            service_name="username",
+            raw_arguments=["john"],
+            long_job_threshold_seconds=5,
+        )
+    )
+
+    assert context.bot.messages == [
+        {"chat_id": 100, "text": "La solicitud tardo mas de lo habitual. Resultado listo."},
+        {"chat_id": 100, "text": "Resumen largo"},
+    ]
+
+
 def test_run_command_job_replies_when_analysis_times_out(monkeypatch):
     config = TelegramBotConfig(bot_token="token", allowed_users=set(), analysis_timeout_seconds=0.01)
     context = FakeContext(config)
@@ -643,6 +702,61 @@ def test_run_command_job_replies_when_analysis_times_out(monkeypatch):
     assert context.bot.messages == [
         {"chat_id": 100, "text": "La solicitud excedio el tiempo maximo de analisis."}
     ]
+
+
+def test_run_command_job_replies_with_validation_error_and_releases_slot(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    context = FakeContext(config)
+    limiter = context.application.bot_data["rate_limiter"]
+    assert limiter.try_acquire_job_slot(user_id=42) is True
+
+    def fail_call_service(service_name, raw_arguments):
+        raise ValueError("Parametro invalido")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_service", fail_call_service)
+
+    asyncio.run(
+        run_command_job(
+            context,
+            chat_id=100,
+            user_id=42,
+            service_name="username",
+            raw_arguments=["john"],
+            long_job_threshold_seconds=1,
+        )
+    )
+
+    assert context.bot.messages == [{"chat_id": 100, "text": "Parametro invalido"}]
+    assert get_abuse_signals(context)["command_validation_denied"] == 1
+    assert limiter.try_acquire_job_slot(user_id=42) is True
+
+
+def test_run_command_job_releases_slot_after_internal_error(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    context = FakeContext(config)
+    limiter = context.application.bot_data["rate_limiter"]
+    assert limiter.try_acquire_job_slot(user_id=42) is True
+
+    def fail_call_service(service_name, raw_arguments):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_service", fail_call_service)
+
+    asyncio.run(
+        run_command_job(
+            context,
+            chat_id=100,
+            user_id=42,
+            service_name="username",
+            raw_arguments=["john"],
+            long_job_threshold_seconds=1,
+        )
+    )
+
+    assert context.bot.messages == [
+        {"chat_id": 100, "text": "Se produjo un error interno al procesar la solicitud."}
+    ]
+    assert limiter.try_acquire_job_slot(user_id=42) is True
 
 
 def test_record_abuse_signal_logs_signal_details_for_operator_visibility(caplog):
@@ -698,6 +812,105 @@ def test_call_service_parses_company_country_option(monkeypatch):
     assert captured == {"company_name": "Acme Labs", "country_code": "ES"}
 
 
+@pytest.mark.parametrize(
+    ("service_name", "raw_arguments", "expected_message"),
+    [
+        ("username", [], "Solicitud invalida. Usa /username <usuario>."),
+        ("email", [], "Solicitud invalida. Usa /email <email>."),
+        ("phone", [], "Solicitud invalida. Usa /phone <numero> [--region XX]."),
+        ("company", [], "Solicitud invalida. Usa /company <nombre> [--country XX]."),
+        ("geo", [], "Solicitud invalida. Usa /geo <lat, lon>."),
+        ("social", [], "Solicitud invalida. Usa /social <usuario>."),
+        ("breach", [], "Solicitud invalida. Usa /breach <email|usuario>."),
+    ],
+)
+def test_call_service_normalizes_missing_arguments_per_command(service_name, raw_arguments, expected_message):
+    with pytest.raises(ValueError, match=expected_message):
+        call_service(service_name, raw_arguments)
+
+
+@pytest.mark.parametrize(
+    ("service_name", "raw_arguments", "expected_message"),
+    [
+        ("email", ["not-an-email"], "Solicitud invalida. Revisa los parametros e intenta de nuevo."),
+        ("phone", ["--region", "ES"], "Solicitud invalida. Usa /phone <numero> [--region XX]."),
+        (
+            "phone",
+            ["+34", "600123123", "--region", "ES"],
+            "Solicitud invalida. Usa /phone <numero> [--region XX].",
+        ),
+        (
+            "company",
+            ["Acme", "Labs", "--country", "ES"],
+            "Solicitud invalida. Usa /company <nombre> [--country XX].",
+        ),
+        ("geo", ["north", "west"], "Solicitud invalida. Revisa los parametros e intenta de nuevo."),
+    ],
+)
+def test_call_service_normalizes_malformed_or_unsupported_argument_shapes(
+    service_name,
+    raw_arguments,
+    expected_message,
+):
+    with pytest.raises(ValueError, match=expected_message):
+        call_service(service_name, raw_arguments)
+
+
+@pytest.mark.parametrize(
+    ("service_name", "raw_arguments"),
+    [
+        ("username", ["demo"]),
+        ("email", ["demo@example.com"]),
+        ("geo", ["40.4168,", "-3.7038"]),
+        ("social", ["demo"]),
+        ("breach", ["demo"]),
+    ],
+)
+def test_call_service_normalizes_controlled_tool_failures_across_current_telegram_capabilities(
+    monkeypatch,
+    service_name,
+    raw_arguments,
+):
+    def controlled_failure(value):
+        raise RuntimeError("backend detail should not leak")
+
+    monkeypatch.setitem(telegram_services.SERVICE_HANDLERS, service_name, controlled_failure)
+
+    with pytest.raises(
+        RuntimeError,
+        match="No se pudo completar la solicitud con la capacidad solicitada. Reintenta mas tarde.",
+    ):
+        call_service(service_name, raw_arguments)
+
+
+def test_run_command_job_uses_same_controlled_failure_message_for_phone(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    context = FakeContext(config)
+
+    def controlled_failure(service_name, raw_arguments):
+        raise ControlledServiceError("No se pudo completar la solicitud con la capacidad solicitada. Reintenta mas tarde.")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_service", controlled_failure)
+
+    asyncio.run(
+        run_command_job(
+            context,
+            chat_id=100,
+            user_id=42,
+            service_name="phone",
+            raw_arguments=["+34", "600123123"],
+            long_job_threshold_seconds=1,
+        )
+    )
+
+    assert context.bot.messages == [
+        {
+            "chat_id": 100,
+            "text": "No se pudo completar la solicitud con la capacidad solicitada. Reintenta mas tarde.",
+        }
+    ]
+
+
 def test_document_message_downloads_temp_file_and_cleans_it(monkeypatch, tmp_path):
     config = TelegramBotConfig(bot_token="token", allowed_users=set())
     update = SimpleNamespace(
@@ -711,7 +924,7 @@ def test_document_message_downloads_temp_file_and_cleans_it(monkeypatch, tmp_pat
     context.bot.files["doc-1"] = FakeTelegramFile(payload=b"%PDF-1.4")
     captured = {}
 
-    def fake_file_service(service_name, file_path, original_name):
+    def fake_file_service(service_name, file_path, original_name, **kwargs):
         captured["service_name"] = service_name
         captured["original_name"] = original_name
         captured["file_path"] = file_path
@@ -893,7 +1106,7 @@ def test_photo_message_downloads_largest_variant(monkeypatch):
     context.bot.files["photo-large"] = FakeTelegramFile(payload=b"\xff\xd8\xff\xe0jpeg")
     captured = {}
 
-    def fake_file_service(service_name, file_path, original_name):
+    def fake_file_service(service_name, file_path, original_name, **kwargs):
         captured["service_name"] = service_name
         captured["original_name"] = original_name
         with open(file_path, "rb") as handle:
@@ -1128,6 +1341,37 @@ def test_send_command_result_attaches_json_for_large_file_analysis_payload():
     assert context.bot.documents[0]["document"].filename == "image_photo.json"
 
 
+def test_run_file_job_sends_same_long_job_notice_before_result(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    context = FakeContext(config)
+    context.bot.files["doc-1"] = FakeTelegramFile(payload=b"%PDF-1.4")
+
+    def successful_file_service(service_name, file_path, original_name, **kwargs):
+        return CommandResult(summary="Resumen largo", payload={}, filename_prefix="ok")
+
+    perf_counter_values = iter([20.0, 25.5])
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_file_service", successful_file_service)
+    monkeypatch.setattr("osint_suite.telegram_bot.time.perf_counter", lambda: next(perf_counter_values))
+
+    asyncio.run(
+        run_file_job(
+            context,
+            chat_id=100,
+            user_id=42,
+            service_name="document",
+            file_id="doc-1",
+            original_name="report.pdf",
+            long_job_threshold_seconds=5,
+        )
+    )
+
+    assert context.bot.messages == [
+        {"chat_id": 100, "text": "La solicitud tardo mas de lo habitual. Resultado listo."},
+        {"chat_id": 100, "text": "Resumen largo"},
+    ]
+
+
 def test_run_file_job_replies_when_analysis_times_out(monkeypatch):
     config = TelegramBotConfig(bot_token="token", allowed_users=set(), analysis_timeout_seconds=0.01)
     context = FakeContext(config)
@@ -1154,3 +1398,163 @@ def test_run_file_job_replies_when_analysis_times_out(monkeypatch):
     assert context.bot.messages == [
         {"chat_id": 100, "text": "La solicitud excedio el tiempo maximo de analisis."}
     ]
+
+
+def test_run_file_job_replies_with_validation_error_and_releases_slot(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    context = FakeContext(config)
+    context.bot.files["doc-1"] = FakeTelegramFile(payload=b"%PDF-1.4")
+    limiter = context.application.bot_data["rate_limiter"]
+    assert limiter.try_acquire_job_slot(user_id=42) is True
+
+    def fail_file_service(service_name, file_path, original_name, **kwargs):
+        raise ValueError("Archivo invalido")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_file_service", fail_file_service)
+
+    asyncio.run(
+        run_file_job(
+            context,
+            chat_id=100,
+            user_id=42,
+            service_name="document",
+            file_id="doc-1",
+            original_name="report.pdf",
+            long_job_threshold_seconds=1,
+        )
+    )
+
+    assert context.bot.messages == [{"chat_id": 100, "text": "Archivo invalido"}]
+    assert get_abuse_signals(context)["file_validation_denied"] == 1
+    assert limiter.try_acquire_job_slot(user_id=42) is True
+
+
+@pytest.mark.parametrize(
+    ("service_name", "file_name", "file_size", "mime_type", "payload", "expected_message"),
+    [
+        (
+            "document",
+            "payload.exe",
+            10,
+            "application/octet-stream",
+            b"MZ...",
+            "Formato de documento no soportado. Envia PDF u Office/OpenDocument.",
+        ),
+        (
+            "document",
+            "report.pdf",
+            0,
+            "application/pdf",
+            b"",
+            "Archivo vacio o sin contenido.",
+        ),
+        (
+            "document",
+            "report.pdf",
+            101,
+            "application/pdf",
+            b"%PDF-1.4",
+            "Archivo demasiado grande. Limite actual: 100 bytes.",
+        ),
+        (
+            "document",
+            "report.pdf",
+            12,
+            "application/pdf",
+            b"not-a-pdf",
+            "Archivo corrupto o no coincide con el tipo esperado.",
+        ),
+        (
+            "image",
+            "telegram_photo.jpg",
+            9,
+            "image/jpeg",
+            b"notimage",
+            "Archivo corrupto o no coincide con el tipo esperado.",
+        ),
+    ],
+)
+def test_dispatch_file_service_normalizes_upload_validation_failures(
+    tmp_path,
+    service_name,
+    file_name,
+    file_size,
+    mime_type,
+    payload,
+    expected_message,
+):
+    file_path = tmp_path / file_name
+    file_path.write_bytes(payload)
+
+    with pytest.raises(FileServiceError, match=expected_message):
+        dispatch_file_service(
+            service_name,
+            str(file_path),
+            file_name,
+            file_size=file_size,
+            max_upload_size_bytes=100,
+            mime_type=mime_type,
+        )
+
+
+def test_run_file_job_replies_with_controlled_service_error_and_releases_slot(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    context = FakeContext(config)
+    context.bot.files["doc-1"] = FakeTelegramFile(payload=b"%PDF-1.4")
+    limiter = context.application.bot_data["rate_limiter"]
+    assert limiter.try_acquire_job_slot(user_id=42) is True
+
+    def fail_file_service(service_name, file_path, original_name, **kwargs):
+        raise ControlledServiceError("No se pudo completar la solicitud con la capacidad solicitada. Reintenta mas tarde.")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_file_service", fail_file_service)
+
+    asyncio.run(
+        run_file_job(
+            context,
+            chat_id=100,
+            user_id=42,
+            service_name="document",
+            file_id="doc-1",
+            original_name="report.pdf",
+            long_job_threshold_seconds=1,
+        )
+    )
+
+    assert context.bot.messages == [
+        {
+            "chat_id": 100,
+            "text": "No se pudo completar la solicitud con la capacidad solicitada. Reintenta mas tarde.",
+        }
+    ]
+    assert limiter.try_acquire_job_slot(user_id=42) is True
+
+
+def test_run_file_job_returns_sanitized_internal_error_and_releases_slot(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    context = FakeContext(config)
+    context.bot.files["doc-1"] = FakeTelegramFile(payload=b"%PDF-1.4")
+    limiter = context.application.bot_data["rate_limiter"]
+    assert limiter.try_acquire_job_slot(user_id=42) is True
+
+    def fail_file_service(service_name, file_path, original_name):
+        raise RuntimeError("sensitive file backend trace")
+
+    monkeypatch.setattr("osint_suite.telegram_bot.call_file_service", fail_file_service)
+
+    asyncio.run(
+        run_file_job(
+            context,
+            chat_id=100,
+            user_id=42,
+            service_name="document",
+            file_id="doc-1",
+            original_name="report.pdf",
+            long_job_threshold_seconds=1,
+        )
+    )
+
+    assert context.bot.messages == [
+        {"chat_id": 100, "text": "Se produjo un error interno al procesar la solicitud."}
+    ]
+    assert limiter.try_acquire_job_slot(user_id=42) is True
