@@ -21,11 +21,11 @@ Active Loop
 
 Approved Task
 
-- **[A2] Entry point registration test** — add one focused packaging test in [`tests/test_setup.py`](tests/test_setup.py) that parses the declared `console_scripts` from [`setup.py`](setup.py) and asserts they are present in [`importlib.metadata.entry_points()`](tests/test_setup.py:178) for the installed `osint-suite` distribution after editable install. Keep scope limited to entry-point registration only; do not change runtime code, version assertions, or requirements-alignment checks.
+- **[A2] Entry point registration test** — complete. [`tests/test_setup.py`](tests/test_setup.py) now parses declared `console_scripts` from [`setup.py`](setup.py) and verifies they are registered in installed `importlib.metadata.entry_points()` after editable install.
 
 Last Outcome
 
-- Completed [A1](codex/status.md:40): [`tests/test_setup.py`](tests/test_setup.py) now verifies that after editable install, [`import osint_suite`](../osint_suite/__init__.py) succeeds without an import-time crash while preserving the existing editable-install smoke coverage.
+- Completed [A2](codex/status.md:24): [`tests/test_setup.py`](tests/test_setup.py) now parses declared `console_scripts` from [`setup.py`](setup.py) and asserts they are registered in installed `importlib.metadata.entry_points()` after editable install.
 
 Debugger Fix
 
@@ -37,7 +37,6 @@ _none_
 
 Next Queue
 
-- **[A2] Entry point registration test** — add test: `importlib.metadata.entry_points(group="console_scripts")` contains the entry points declared in `setup.py`.
 - **[A3] Version alignment test** — add test: `importlib.metadata.version("osint-suite")` matches the version string in `setup.py`.
 - **[A4] requirements.txt ↔ setup.py alignment test** — add test: parse both files and assert no package present in one is absent from the other (name-level check, not version pinning).
 
@@ -52,6 +51,7 @@ Next Queue
 Completed
 
 - **[A1] Package importability test** — complete. Editable install smoke now asserts [`import osint_suite`](../osint_suite/__init__.py) succeeds without import-time crash.
+- **[A2] Entry point registration test** — complete. Editable install smoke now verifies declared `console_scripts` are registered in installed metadata entry points.
 - **Phase A smoke** — basic `setup.py --name` smoke test exists and passes.
 - **Phase B** — complete. README documents codex hybrid model; contract phrases tested.
 - **Phase C** — complete. Telegram bot deployed and verified (2026-04-07, all 11 runbook steps).

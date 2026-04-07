@@ -1,3 +1,5 @@
+import ast
+
 import pytest
 from packaging.requirements import Requirement
 
@@ -47,6 +49,35 @@ def load_runtime_requirements(repo_root):
 def normalize_requirement(requirement_string):
     requirement = Requirement(requirement_string)
     return f"{requirement.name.lower()}{requirement.specifier}"
+
+
+def load_declared_console_scripts(repo_root):
+    setup_contents = (repo_root / "setup.py").read_text(encoding="utf-8")
+    setup_ast = ast.parse(setup_contents)
+
+    for node in ast.walk(setup_ast):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "setup":
+            continue
+
+        for keyword in node.keywords:
+            if keyword.arg != "entry_points" or not isinstance(keyword.value, ast.Dict):
+                continue
+
+            for key_node, value_node in zip(keyword.value.keys, keyword.value.values):
+                if not isinstance(key_node, ast.Constant) or key_node.value != "console_scripts":
+                    continue
+                if not isinstance(value_node, ast.List):
+                    continue
+
+                return {
+                    entry.value.split("=", 1)[0]: entry.value.split("=", 1)[1]
+                    for entry in value_node.elts
+                    if isinstance(entry, ast.Constant) and isinstance(entry.value, str)
+                }
+
+    raise AssertionError("setup.py does not declare console_scripts entry points")
 
 
 def test_setup_py_name_command_succeeds(repo_root):
@@ -232,6 +263,47 @@ for forbidden in ("pytest", "black", "flake8"):
 print("ok")
 """
         result = run_python_code(python_bin, check, cwd=repo_root)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "ok"
+
+
+def test_editable_install_registers_declared_console_scripts_in_entry_points(repo_root):
+    declared_console_scripts = load_declared_console_scripts(repo_root)
+
+    with temporary_venv() as python_bin:
+        install_result = install_package(python_bin, repo_root, editable=True)
+        assert install_result.returncode == 0, install_result.stderr
+
+        registration_check = f"""
+from importlib import metadata
+
+declared_console_scripts = {declared_console_scripts!r}
+distribution = metadata.distribution("osint-suite")
+distribution_console_scripts = {{
+    entry.name: entry.value
+    for entry in distribution.entry_points
+    if entry.group == "console_scripts"
+}}
+
+all_console_scripts = metadata.entry_points()
+if hasattr(all_console_scripts, "select"):
+    registered_console_scripts = {{
+        entry.name: entry.value
+        for entry in all_console_scripts.select(group="console_scripts")
+    }}
+else:
+    registered_console_scripts = {{
+        entry.name: entry.value
+        for entry in all_console_scripts.get("console_scripts", [])
+    }}
+
+for name, value in declared_console_scripts.items():
+    assert distribution_console_scripts[name] == value
+    assert registered_console_scripts[name] == value
+
+print("ok")
+"""
+        result = run_python_code(python_bin, registration_check, cwd=repo_root)
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "ok"
 
