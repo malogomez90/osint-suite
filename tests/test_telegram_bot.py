@@ -373,6 +373,135 @@ def test_breach_command_requires_argument():
     assert update.effective_message.replies == ["Uso: /breach <email|usuario>"]
 
 
+def test_email_command_requires_argument():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+
+    asyncio.run(telegram_bot_module.email_command(update, context))
+
+    assert update.effective_message.replies == ["Uso: /email <email>"]
+
+
+def test_phone_command_requires_argument():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+
+    asyncio.run(telegram_bot_module.phone_command(update, context))
+
+    assert update.effective_message.replies == ["Uso: /phone <numero> [--region XX]"]
+
+
+def test_company_command_requires_argument():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+
+    asyncio.run(telegram_bot_module.company_command(update, context))
+
+    assert update.effective_message.replies == ["Uso: /company <nombre> [--country XX]"]
+
+
+def test_geo_command_requires_argument():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+
+    asyncio.run(telegram_bot_module.geo_command(update, context))
+
+    assert update.effective_message.replies == ["Uso: /geo <lat, lon>"]
+
+
+def test_run_social_lookup_returns_summary_and_payload(monkeypatch):
+    class FakeAnalyzer:
+        def __init__(self, delay=0.2):
+            self.delay = delay
+
+        def cross_reference(self, username):
+            return {
+                "username": username,
+                "platforms_checked": ["instagram", "twitter", "github"],
+                "profiles_found": [{"platform": "GitHub"}],
+                "profiles_not_found": [{"platform": "Instagram"}],
+                "cross_references": [{"platform": "github", "url": "https://github.com/demo"}],
+            }
+
+    monkeypatch.setattr("osint_suite.telegram_services.SocialMediaAnalyzer", FakeAnalyzer)
+
+    result = telegram_services.run_social_lookup("demo_user")
+
+    assert result.payload["username"] == "demo_user"
+    assert "Analisis social @demo_user" in result.summary
+    assert "Plataformas revisadas" in result.summary
+    assert result.filename_prefix == "social_demo_user"
+
+
+def test_run_breach_lookup_returns_email_risk_summary(monkeypatch):
+    class FakeChecker:
+        def analyze_exposure_risk(self, value):
+            return {
+                "email": value,
+                "risk_level": "medium",
+                "risk_factors": [{"type": "free_email"}],
+                "recommendations": ["usa 2fa", "usa alias"],
+            }
+
+    monkeypatch.setattr("osint_suite.telegram_services.BreachChecker", FakeChecker)
+
+    result = telegram_services.run_breach_lookup("demo@example.com")
+
+    assert result.payload["email"] == "demo@example.com"
+    assert "Analisis de brechas demo@example.com" in result.summary
+    assert "Nivel de riesgo: medium" in result.summary
+    assert result.filename_prefix == "breach_demo_at_example.com"
+
+
+def test_run_breach_lookup_returns_username_summary(monkeypatch):
+    class FakeChecker:
+        def check_username_breach(self, value):
+            return {
+                "username": value,
+                "sources_checked": [{"name": "LeakCheck"}, {"name": "IntelX"}],
+                "potential_breaches": [],
+                "recommendations": ["verificar manualmente"],
+            }
+
+    monkeypatch.setattr("osint_suite.telegram_services.BreachChecker", FakeChecker)
+
+    result = telegram_services.run_breach_lookup("demo_user")
+
+    assert result.payload["username"] == "demo_user"
+    assert "Analisis de brechas demo_user" in result.summary
+    assert "Fuentes revisadas: 2" in result.summary
+    assert result.filename_prefix == "breach_demo_user"
+
+
+def test_create_application_registers_all_service_commands():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+
+    application = telegram_bot_module.create_application(config)
+
+    registered_commands = {
+        next(iter(handler.commands))
+        for group in application.handlers.values()
+        for handler in group
+        if hasattr(handler, "commands")
+    }
+
+    expected_commands = {"start", "help", "username", "email", "phone", "company", "geo", "social", "breach"}
+
+    assert expected_commands.issubset(registered_commands)
+
+
+def test_all_service_handlers_have_command_or_file_registration():
+    command_names = {"username", "email", "phone", "company", "geo", "social", "breach"}
+    file_service_names = {"document", "image"}
+
+    assert command_names == set(telegram_services.SERVICE_HANDLERS.keys())
+    assert file_service_names == set(telegram_services.FILE_HANDLERS.keys())
+
+
 def test_send_command_result_attaches_json_when_payload_is_large():
     config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=20)
     context = FakeContext(config)
