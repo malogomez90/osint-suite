@@ -19,13 +19,35 @@ Active Loop
 3. Keep future Telegram slices aligned with the single response contract and the current service-layer validation/error contract rather than adding per-capability message variants.
 4. Treat social-analysis and breach-analysis as in-scope Telegram capabilities for future planning.
 
+Approved Task
+
+_none — Architect must define next task_
+
+Last Outcome
+
+_none_
+
+Debugger Fix
+
+_none_
+
+Loop Halt Reason
+
+_none_
+
 Next Queue
 
-- **Phase A (infra + backend):** treat as **complete** for the current checklist unless CI or a new packaging edge case appears; keep tests green when `setup.py` / `requirements.txt` change.
-- **Phase B (agents + docs):** **complete** - README states that `codex/` governs agent behavior and that some `codex/*.md` files are contract-checked by tests; moving `codex/` or editing contractual wording requires updating `.cursorrules` and tests.
-- **Phase C (backend + infra):** the approved validation/error-contract slice is now **complete** for the current checklist: live smoke baseline remains intact, `.env` fallback is supported, local secret files are ignored, operator-facing telemetry is present, command UX is normalized, the Telegram presentation layer enforces one [`CommandResult`](../osint_suite/telegram_services.py) contract across command/file flows, and current Telegram commands plus document/image upload flows share one normalized validation/error contract with focused regression coverage green.
-- **Checkpoint completion note:** the previously missing [codex/status.md](codex/status.md) update is now synchronized with the verified Telegram bot state and deployment documentation.
-- **Phase C planning note:** [`osint_suite/social_analyzer.py`](../osint_suite/social_analyzer.py) and [`osint_suite/breach_checker.py`](../osint_suite/breach_checker.py) are explicitly part of the Telegram product surface; planning should treat `/social` and `/breach` as current capabilities rather than deferred or package-only tools.
+- **[A1] Package importability test** — add test in `tests/test_setup.py`: `import osint_suite` succeeds after editable install; verify no import-time crash.
+- **[A2] Entry point registration test** — add test: `importlib.metadata.entry_points(group="console_scripts")` contains the entry points declared in `setup.py`.
+- **[A3] Version alignment test** — add test: `importlib.metadata.version("osint-suite")` matches the version string in `setup.py`.
+- **[A4] requirements.txt ↔ setup.py alignment test** — add test: parse both files and assert no package present in one is absent from the other (name-level check, not version pinning).
+
+Completed
+
+- **Phase A smoke** — basic `setup.py --name` smoke test exists and passes.
+- **Phase B** — complete. README documents codex hybrid model; contract phrases tested.
+- **Phase C** — complete. Telegram bot deployed and verified (2026-04-07, all 11 runbook steps).
+
 - **Phase C operational verification: COMPLETE (2026-04-07)**
   - [x] Step 1: `--check-config` → `Telegram bot configuration OK` — **verified**
   - [x] Step 2: systemd unit running, polling active — **verified**
