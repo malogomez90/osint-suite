@@ -21,7 +21,7 @@ Active Loop
 
 Approved Task
 
-_none_
+- **[A2] Entry point registration test** — add one focused packaging test in [`tests/test_setup.py`](tests/test_setup.py) that parses the declared `console_scripts` from [`setup.py`](setup.py) and asserts they are present in [`importlib.metadata.entry_points()`](tests/test_setup.py:178) for the installed `osint-suite` distribution after editable install. Keep scope limited to entry-point registration only; do not change runtime code, version assertions, or requirements-alignment checks.
 
 Last Outcome
 
@@ -40,6 +40,14 @@ Next Queue
 - **[A2] Entry point registration test** — add test: `importlib.metadata.entry_points(group="console_scripts")` contains the entry points declared in `setup.py`.
 - **[A3] Version alignment test** — add test: `importlib.metadata.version("osint-suite")` matches the version string in `setup.py`.
 - **[A4] requirements.txt ↔ setup.py alignment test** — add test: parse both files and assert no package present in one is absent from the other (name-level check, not version pinning).
+
+- **[D1] HIBP module** — create `osint_suite/hibp_checker.py`. Reads `HIBP_API_KEY` from env (optional). If key present: GET `https://haveibeenpwned.com/api/v3/breachedaccount/{email}?truncateResponse=false` with `hibp-api-key` header and `User-Agent: osint-suite`; return list of breach dicts (Name, Domain, BreachDate, PwnCount, DataClasses). If key absent: return `CommandResult` with summary `"HIBP no configurado — añade HIBP_API_KEY al entorno."` and empty payload. No crash, no partial result. Add `requests` call with 10s timeout. Add unit tests with mocked HTTP.
+- **[D2] Wire HIBP into `/breach` command** — in `osint_suite/telegram_services.py`, when `service_name == "breach"` and input looks like an email, call `hibp_checker.check_email(email)` in addition to existing `breach_checker`; merge results into one `CommandResult`. When input is a username (no `@`, no `.tld`), skip HIBP and use only existing breach_checker. Add HIBP_API_KEY to `codex/telegram_deployment_runbook.md` optional env vars list.
+- **[D3] Expose HIBP_API_KEY in systemd env file docs** — update `codex/telegram_deployment_runbook.md` to list `HIBP_API_KEY` as optional env var with note: "leave unset to disable HIBP lookups gracefully".
+
+- **[E1] Profile analyzer module** — create `osint_suite/profile_analyzer.py`. Function `analyze_profile(target: str) -> CommandResult`. If target contains `@` and `.`: treat as email — run email_analyzer + hibp_checker + breach_checker; merge into unified profile dict with sections: `email`, `breaches`, `risk_score` (count of breaches × avg PwnCount heuristic). If target has no `@`: treat as username — run username_checker + social_analyzer; merge into unified profile dict with sections: `username`, `social`, `platform_count`. Return single `CommandResult` with summary of top findings and full merged payload as JSON.
+- **[E2] `/profile` Telegram command** — add handler in `telegram_bot.py` and dispatch in `telegram_services.py`. Usage: `/profile <email|usuario>`. Calls `profile_analyzer.analyze_profile`. Long result always sends JSON attachment. Add to HELP_TEXT. Add unit tests covering email path and username path.
+- **[E3] Update runbook and status** — add `/profile` to `codex/telegram_deployment_runbook.md` post-deploy verification checklist (step: run `/profile` with a test email, confirm merged output). Update `codex/status.md` to reflect Phase D+E as new approved feature surface.
 
 Completed
 
