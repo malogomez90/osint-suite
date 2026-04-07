@@ -200,10 +200,20 @@ def test_editable_install_exposes_expected_console_scripts_and_runtime_deps(repo
         install_result = install_package(python_bin, repo_root, editable=True)
         assert install_result.returncode == 0, install_result.stderr
 
+        import_check = """
+import osint_suite
+
+assert osint_suite.__name__ == "osint_suite"
+print("ok")
+"""
+        import_result = run_python_code(python_bin, import_check, cwd=repo_root)
+        assert import_result.returncode == 0, import_result.stderr
+        assert import_result.stdout.strip() == "ok"
+
         check = """
 from importlib import metadata
 import osint_suite
-
+ 
 distribution = metadata.distribution("osint-suite")
 console_scripts = {
     entry.name: entry.value
