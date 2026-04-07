@@ -680,7 +680,12 @@ async def send_command_result(
     result: CommandResult,
 ) -> None:
     config: TelegramBotConfig = context.application.bot_data["config"]
-    payload_bytes = json.dumps(result.payload, ensure_ascii=False, indent=2).encode("utf-8")
+    def _default(obj):
+        if isinstance(obj, bytes):
+            return obj.hex()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+    payload_bytes = json.dumps(result.payload, ensure_ascii=False, indent=2, default=_default).encode("utf-8")
     for chunk in split_text_chunks(result.summary_text):
         await context.bot.send_message(chat_id=chat_id, text=chunk)
 
@@ -708,6 +713,7 @@ def configure_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def load_dotenv_defaults(dotenv_path: str = ".env") -> None:
