@@ -1,3 +1,5 @@
+> Legacy/template module note: this file is kept for historical reference only and is no longer authoritative for the current repository structure. Use [`docs/repo-standard.md`](../docs/repo-standard.md) as the source of truth.
+
 ROLE: Backend (Python + integración)
 
 El **backend** de este repo es el **código Python ejecutable**: paquete `osint_suite`, CLIs, y **integración del bot de Telegram** (handlers, servicios, colas). No hay API REST pública amplia en el alcance actual salvo diseño explícito (`codex/initiative_next.md`).

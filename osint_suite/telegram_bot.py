@@ -164,6 +164,8 @@ HELP_TEXT = (
     "/phone <numero>\n"
     "/company <nombre>\n"
     "/geo <lat, lon>\n"
+    "/social <valor>\n"
+    "/breach <valor>\n"
     "\n"
     "Tambien puedes enviar un PDF/documento Office o una imagen para analizar metadatos.\n"
     "\n"
@@ -189,6 +191,8 @@ def create_application(config: TelegramBotConfig) -> Application:
     application.add_handler(CommandHandler("phone", phone_command))
     application.add_handler(CommandHandler("company", company_command))
     application.add_handler(CommandHandler("geo", geo_command))
+    application.add_handler(CommandHandler("social", social_command))
+    application.add_handler(CommandHandler("breach", breach_command))
     application.add_handler(MessageHandler(filters.Document.ALL, document_message))
     application.add_handler(MessageHandler(filters.PHOTO, photo_message))
     return application
@@ -228,6 +232,14 @@ async def company_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def geo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await execute_service_command(update, context, "geo", "Uso: /geo <lat, lon>")
+
+
+async def social_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await execute_service_command(update, context, "social", "Uso: /social <valor>")
+
+
+async def breach_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await execute_service_command(update, context, "breach", "Uso: /breach <valor>")
 
 
 async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

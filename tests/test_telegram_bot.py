@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 
+import osint_suite.telegram_bot as telegram_bot_module
 import osint_suite.telegram_services as telegram_services
 from osint_suite.telegram_bot import (
     HELP_TEXT,
@@ -310,6 +311,55 @@ def test_username_command_replies_when_job_slot_is_busy():
     assert update.effective_message.replies == [
         "Ya tienes una tarea en curso. Espera a que termine antes de lanzar otra."
     ]
+
+
+def test_help_text_lists_social_and_breach_commands():
+    assert "/social <valor>" in HELP_TEXT
+    assert "/breach <valor>" in HELP_TEXT
+
+
+def test_dispatch_service_supports_social_handler(monkeypatch):
+    def fake_social_handler(value):
+        return CommandResult(summary=f"social {value}", payload={"value": value}, filename_prefix="social_demo")
+
+    monkeypatch.setitem(telegram_services.SERVICE_HANDLERS, "social", fake_social_handler)
+
+    result = dispatch_service("social", ["demo-user"])
+
+    assert result.summary == "social demo-user"
+    assert result.payload == {"value": "demo-user"}
+
+
+def test_dispatch_service_supports_breach_handler(monkeypatch):
+    def fake_breach_handler(value):
+        return CommandResult(summary=f"breach {value}", payload={"value": value}, filename_prefix="breach_demo")
+
+    monkeypatch.setitem(telegram_services.SERVICE_HANDLERS, "breach", fake_breach_handler)
+
+    result = dispatch_service("breach", ["demo@example.com"])
+
+    assert result.summary == "breach demo@example.com"
+    assert result.payload == {"value": "demo@example.com"}
+
+
+def test_social_command_requires_argument():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+
+    asyncio.run(telegram_bot_module.social_command(update, context))
+
+    assert update.effective_message.replies == ["Uso: /social <valor>"]
+
+
+def test_breach_command_requires_argument():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+
+    asyncio.run(telegram_bot_module.breach_command(update, context))
+
+    assert update.effective_message.replies == ["Uso: /breach <valor>"]
 
 
 def test_send_command_result_attaches_json_when_payload_is_large():

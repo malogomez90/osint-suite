@@ -20,7 +20,9 @@ from .email_osint import EmailOSINT
 from .geolocation_helper import GeolocationHelper
 from .image_metadata import ImageMetadataExtractor
 from .phone_investigator import PhoneInvestigator
+from .social_analyzer import SocialMediaAnalyzer
 from .username_search import UsernameSearcher
+from .breach_checker import BreachChecker
 
 
 @dataclass
@@ -139,6 +141,51 @@ def run_geo_lookup(coords_input: str) -> CommandResult:
     return CommandResult(summary=summary, payload=results, filename_prefix=filename)
 
 
+def run_social_lookup(username: str) -> CommandResult:
+    analyzer = SocialMediaAnalyzer(delay=0.2)
+    results = analyzer.cross_reference(username)
+    summary = format_summary(
+        f"Analisis social @{results['username']}",
+        [
+            ("Plataformas revisadas", len(results.get("platforms_checked", []))),
+            ("Perfiles encontrados", len(results.get("profiles_found", []))),
+            ("No encontrados", len(results.get("profiles_not_found", []))),
+            ("Cross-references", len(results.get("cross_references", []))),
+        ],
+    )
+    return CommandResult(summary=summary, payload=results, filename_prefix=f"social_{results['username']}")
+
+
+def run_breach_lookup(value: str) -> CommandResult:
+    checker = BreachChecker()
+    if "@" in value:
+        results = checker.analyze_exposure_risk(value)
+        summary = format_summary(
+            f"Analisis de brechas {value}",
+            [
+                ("Tipo", "email"),
+                ("Nivel de riesgo", results.get("risk_level", "unknown")),
+                ("Factores de riesgo", len(results.get("risk_factors", []))),
+                ("Recomendaciones", len(results.get("recommendations", []))),
+            ],
+        )
+        safe_value = value.replace("@", "_at_")
+    else:
+        results = checker.check_username_breach(value)
+        summary = format_summary(
+            f"Analisis de brechas {value}",
+            [
+                ("Tipo", "username"),
+                ("Fuentes revisadas", len(results.get("sources_checked", []))),
+                ("Hallazgos potenciales", len(results.get("potential_breaches", []))),
+                ("Recomendaciones", len(results.get("recommendations", []))),
+            ],
+        )
+        safe_value = value
+
+    return CommandResult(summary=summary, payload=results, filename_prefix=f"breach_{safe_value}")
+
+
 def is_supported_document(filename: str) -> bool:
     return Path(filename).suffix.lower() in DOCUMENT_FORMATS
 
@@ -199,6 +246,8 @@ SERVICE_HANDLERS: Dict[str, Callable[..., CommandResult]] = {
     "phone": run_phone_lookup,
     "company": run_company_lookup,
     "geo": run_geo_lookup,
+    "social": run_social_lookup,
+    "breach": run_breach_lookup,
 }
 
 FILE_HANDLERS: Dict[str, Callable[[str, str], CommandResult]] = {
@@ -214,7 +263,7 @@ def dispatch_service(service_name: str, args: Sequence[str]) -> CommandResult:
             return dispatch_phone_service(normalized_args)
         if service_name == "company":
             return dispatch_company_service(normalized_args)
-        if service_name in {"username", "email", "geo"}:
+        if service_name in {"username", "email", "geo", "social", "breach"}:
             return SERVICE_HANDLERS[service_name](" ".join(normalized_args).strip())
     raise ValueError(f"Unsupported service: {service_name}")
 
