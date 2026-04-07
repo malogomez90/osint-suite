@@ -35,6 +35,7 @@ from .telegram_services import (
     DOCUMENT_FORMATS,
     is_supported_document,
 )
+from .telegram_osint import TelegramOSINTPool, pool_from_env
 
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,8 @@ HELP_TEXT = (
     "/geo <lat, lon> - Analiza coordenadas geograficas\n"
     "/social <usuario> - Analiza perfiles sociales y referencias cruzadas\n"
     "/breach <email|usuario> - Si envias un email, analiza riesgo; Si envias un usuario, revisa fuentes de brechas\n"
+    "/tg <username> - Lookup de usuario de Telegram via MTProto\n"
+    "/tggroup <username> - Lookup de grupo o canal de Telegram via MTProto\n"
     "\n"
     "Archivos:\n"
     "Documento/PDF - extrae metadatos y analisis de documento\n"
@@ -153,8 +156,29 @@ HELP_TEXT = (
 )
 
 
+async def _post_init(application: Application) -> None:
+    """Start the userbot pool on bot startup."""
+    pool = pool_from_env()
+    if pool is not None:
+        await pool.start()
+    application.bot_data["tg_osint_pool"] = pool
+
+
+async def _post_shutdown(application: Application) -> None:
+    """Stop the userbot pool on bot shutdown."""
+    pool = application.bot_data.get("tg_osint_pool")
+    if pool is not None:
+        await pool.stop()
+
+
 def create_application(config: TelegramBotConfig) -> Application:
-    application = Application.builder().token(config.bot_token).build()
+    application = (
+        Application.builder()
+        .token(config.bot_token)
+        .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
+        .build()
+    )
     limiter = InMemoryRateLimiter(
         per_minute=config.rate_limit_per_minute,
         per_hour=config.rate_limit_per_hour,
@@ -173,6 +197,8 @@ def create_application(config: TelegramBotConfig) -> Application:
     application.add_handler(CommandHandler("geo", geo_command))
     application.add_handler(CommandHandler("social", social_command))
     application.add_handler(CommandHandler("breach", breach_command))
+    application.add_handler(CommandHandler("tg", tg_command))
+    application.add_handler(CommandHandler("tggroup", tggroup_command))
     application.add_handler(MessageHandler(filters.Document.ALL, document_message))
     application.add_handler(MessageHandler(filters.PHOTO, photo_message))
     return application
@@ -220,6 +246,14 @@ async def social_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def breach_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await execute_service_command(update, context, "breach", "Uso: /breach <email|usuario>")
+
+
+async def tg_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await execute_osint_command(update, context, "tg", "Uso: /tg <username>")
+
+
+async def tggroup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await execute_osint_command(update, context, "tggroup", "Uso: /tggroup <username>")
 
 
 async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -347,6 +381,132 @@ def record_abuse_signal(
             "outcome": "abuse_signal",
         },
     )
+
+
+async def execute_osint_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    command: str,
+    usage_text: str,
+) -> None:
+    """Handler for /tg and /tggroup — calls the userbot pool directly (async)."""
+    if not await ensure_user_allowed(update, context):
+        return
+
+    message = update.effective_message
+    user_id = update.effective_user.id if update.effective_user else 0
+    config: TelegramBotConfig = context.application.bot_data["config"]
+    limiter: InMemoryRateLimiter = context.application.bot_data["rate_limiter"]
+    pool: TelegramOSINTPool | None = context.application.bot_data.get("tg_osint_pool")
+
+    if pool is None:
+        await message.reply_text(
+            "Userbot no configurado. Añade TELEGRAM_APP_API_ID, TELEGRAM_APP_API_HASH "
+            "y TELEGRAM_USERBOT_SESSION_1 al entorno."
+        )
+        return
+
+    if not context.args:
+        await message.reply_text(usage_text)
+        return
+
+    if not limiter.allow_request(user_id):
+        record_abuse_signal(context, "rate_limit_denied", user_id, command, message.chat_id)
+        await message.reply_text("Limite de uso excedido. Espera un momento antes de reintentar.")
+        return
+
+    if not limiter.try_acquire_job_slot(user_id):
+        record_abuse_signal(context, "concurrent_job_denied", user_id, command, message.chat_id)
+        await message.reply_text("Ya tienes una tarea en curso. Espera a que termine.")
+        return
+
+    username = context.args[0].strip().lstrip("@")
+    await message.reply_text("Consultando via userbot...")
+
+    try:
+        if command == "tg":
+            data = await pool.lookup_user(username)
+            full_name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or "sin nombre"
+            flags = []
+            if data.get("verified"):
+                flags.append("verificado")
+            if data.get("bot"):
+                flags.append("bot")
+            if data.get("restricted"):
+                flags.append("restringido")
+            if data.get("scam"):
+                flags.append("SCAM")
+            if data.get("fake"):
+                flags.append("FAKE")
+            if data.get("deleted"):
+                flags.append("eliminado")
+            flag_str = ", ".join(flags) if flags else "ninguno"
+            phone = data.get("phone") or "oculto"
+            bio = data.get("bio") or "sin bio"
+            summary = (
+                f"Perfil Telegram @{data.get('username') or username}\n"
+                f"- ID: {data['id']}\n"
+                f"- Nombre: {full_name}\n"
+                f"- Bio: {bio}\n"
+                f"- Telefono: {phone}\n"
+                f"- Flags: {flag_str}"
+            )
+            result = CommandResult(
+                summary=summary,
+                payload=data,
+                filename_prefix=f"tg_{username}",
+            )
+        else:
+            data = await pool.lookup_channel(username)
+            kind = "canal" if data.get("broadcast") else "supergrupo" if data.get("megagroup") else "grupo"
+            members = data.get("participants_count")
+            members_str = str(members) if members is not None else "desconocido"
+            flags = []
+            if data.get("verified"):
+                flags.append("verificado")
+            if data.get("scam"):
+                flags.append("SCAM")
+            if data.get("fake"):
+                flags.append("FAKE")
+            if data.get("restricted"):
+                flags.append("restringido")
+            flag_str = ", ".join(flags) if flags else "ninguno"
+            desc = data.get("description") or "sin descripcion"
+            summary = (
+                f"Telegram {kind} @{data.get('username') or username}\n"
+                f"- ID: {data['id']}\n"
+                f"- Titulo: {data.get('title', '')}\n"
+                f"- Descripcion: {desc}\n"
+                f"- Miembros: {members_str}\n"
+                f"- Tipo: {kind}\n"
+                f"- Flags: {flag_str}\n"
+                f"- Creado: {data.get('date', 'desconocido')}"
+            )
+            result = CommandResult(
+                summary=summary,
+                payload=data,
+                filename_prefix=f"tggroup_{username}",
+            )
+
+        logger.info(
+            "Telegram OSINT command completed",
+            extra={"command": command, "user_id": user_id, "outcome": "success"},
+        )
+        await send_command_result(context, message.chat_id, result)
+
+    except ValueError as exc:
+        record_abuse_signal(context, "command_validation_denied", user_id, command, message.chat_id)
+        await message.reply_text(str(exc))
+    except ControlledServiceError as exc:
+        await message.reply_text(str(exc))
+    except Exception:
+        logger.exception(
+            "Telegram OSINT command failed",
+            extra={"command": command, "user_id": user_id, "outcome": "internal_error"},
+        )
+        await message.reply_text("Se produjo un error interno al procesar la solicitud.")
+    finally:
+        limiter.release_job_slot(user_id)
 
 
 async def execute_service_command(

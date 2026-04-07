@@ -18,6 +18,7 @@ olefile>=0.46
 phonenumbers>=8.12.0
 python-dateutil>=2.8.0
 python-telegram-bot>=20.8,<21.0
+telethon>=1.28
 
 # Opcional: Para geolocalización avanzada
 # pyproj>=3.0.0  # Descomentar si se necesita conversión UTM completa
