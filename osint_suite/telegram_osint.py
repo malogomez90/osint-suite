@@ -399,21 +399,78 @@ class TelegramOSINTPool:
             ),
         )
 
-        if isinstance(result, User):
-            data = _extract_user_info(result)
-            data["entity_type"] = "user"
-        elif isinstance(result, (Channel, Chat)):
-            data = _extract_channel_info(result)
-            data["entity_type"] = "channel" if isinstance(result, Channel) else "chat"
-        else:
-            raise ValueError("Entidad no reconocida para este username.")
+        # ResolveUsernameRequest returns a contacts.ResolvedPeer, not a User/Channel directly.
+        # The ResolvedPeer has: peer (PeerUser/PeerChannel), users[], chats[]
+        peer = getattr(result, "peer", None)
+        users_list = getattr(result, "users", []) or []
+        chats_list = getattr(result, "chats", []) or []
 
-        self._cache_result(cache_key, data)
-        logger.info(
-            "Username resolved",
-            extra={"username": username, "entity_type": data["entity_type"], "outcome": "success"},
+        if peer is not None:
+            if isinstance(peer, PeerUser):
+                # Find the user in the users list
+                for u in users_list:
+                    if isinstance(u, User) and u.id == peer.user_id:
+                        data = _extract_user_info(u)
+                        data["entity_type"] = "user"
+                        self._cache_result(cache_key, data)
+                        logger.info(
+                            "Username resolved",
+                            extra={"username": username, "entity_type": "user", "outcome": "success"},
+                        )
+                        return data
+            elif isinstance(peer, (PeerChannel, PeerChat)):
+                # Find the channel/chat in the chats list
+                channel_id = getattr(peer, "channel_id", None) or getattr(peer, "chat_id", None)
+                for c in chats_list:
+                    if isinstance(c, (Channel, Chat)) and c.id == channel_id:
+                        data = _extract_channel_info(c)
+                        data["entity_type"] = "channel" if isinstance(c, Channel) else "chat"
+                        self._cache_result(cache_key, data)
+                        logger.info(
+                            "Username resolved",
+                            extra={"username": username, "entity_type": data["entity_type"], "outcome": "success"},
+                        )
+                        return data
+
+        # Fallback: try to find any User or Channel in the result lists
+        for u in users_list:
+            if isinstance(u, User):
+                data = _extract_user_info(u)
+                data["entity_type"] = "user"
+                self._cache_result(cache_key, data)
+                logger.info(
+                    "Username resolved (fallback)",
+                    extra={"username": username, "entity_type": "user", "outcome": "success"},
+                )
+                return data
+
+        for c in chats_list:
+            if isinstance(c, (Channel, Chat)):
+                data = _extract_channel_info(c)
+                data["entity_type"] = "channel" if isinstance(c, Channel) else "chat"
+                self._cache_result(cache_key, data)
+                logger.info(
+                    "Username resolved (fallback)",
+                    extra={"username": username, "entity_type": data["entity_type"], "outcome": "success"},
+                )
+                return data
+
+        # Log what we actually got for debugging
+        result_type = type(result).__name__
+        logger.warning(
+            "ResolveUsernameRequest returned unexpected type",
+            extra={
+                "username": username,
+                "result_type": result_type,
+                "result_attrs": dir(result),
+                "users_count": len(users_list),
+                "chats_count": len(chats_list),
+            },
         )
-        return data
+        raise ValueError(
+            f"No se pudo resolver el username @{username}. "
+            f"La cuenta puede no tener acceso a esta entidad."
+        )
 
     async def get_all_chats(self) -> Dict[str, Any]:
         """
