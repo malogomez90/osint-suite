@@ -151,6 +151,9 @@ HELP_TEXT = (
     "/tggroup <username> - Lookup de grupo o canal de Telegram via MTProto\n"
     "/tginfo <username> - Recon enriquecido de usuario de Telegram via MTProto\n"
     "/tggroupinfo <username> - Recon enriquecido de grupo o canal de Telegram via MTProto\n"
+    "/tgresolve <username> - Resuelve cualquier username sin estar en el grupo/canal\n"
+    "/tgallchats - Lista todos los chats accesibles de la cuenta userbot\n"
+    "/tghealth - Verifica salud, restricciones y sesiones activas de la cuenta\n"
     "\n"
     "Archivos:\n"
     "Documento/PDF - extrae metadatos y analisis de documento\n"
@@ -205,6 +208,9 @@ def create_application(config: TelegramBotConfig) -> Application:
     application.add_handler(CommandHandler("tggroup", tggroup_command))
     application.add_handler(CommandHandler("tginfo", tginfo_command))
     application.add_handler(CommandHandler("tggroupinfo", tggroupinfo_command))
+    application.add_handler(CommandHandler("tgresolve", tgresolve_command))
+    application.add_handler(CommandHandler("tgallchats", tgallchats_command))
+    application.add_handler(CommandHandler("tghealth", tghealth_command))
     application.add_handler(MessageHandler(filters.Document.ALL, document_message))
     application.add_handler(MessageHandler(filters.PHOTO, photo_message))
     return application
@@ -268,6 +274,18 @@ async def tginfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def tggroupinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await execute_osint_command(update, context, "tggroupinfo", "Uso: /tggroupinfo <username>")
+
+
+async def tgresolve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await execute_osint_command(update, context, "tgresolve", "Uso: /tgresolve <username>")
+
+
+async def tgallchats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await execute_advanced_osint_command(update, context, "tgallchats", "Uso: /tgallchats")
+
+
+async def tghealth_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await execute_advanced_osint_command(update, context, "tghealth", "Uso: /tghealth")
 
 
 async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -552,6 +570,170 @@ def build_tggroupinfo_summary(data: dict[str, object], username: str) -> Command
     )
 
 
+def build_tgresolve_summary(data: dict[str, object], username: str) -> CommandResult:
+    entity_type = data.get("entity_type", "unknown")
+    type_label = "usuario" if entity_type == "user" else "canal" if entity_type == "channel" else "grupo"
+    flags = build_flag_list(
+        data,
+        [
+            ("verified", "verificado"),
+            ("bot", "bot"),
+            ("restricted", "restringido"),
+            ("scam", "SCAM"),
+            ("fake", "FAKE"),
+            ("deleted", "eliminado"),
+        ],
+    )
+    flag_str = ", ".join(flags) if flags else "ninguno"
+    if entity_type == "user":
+        full_name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or "sin nombre"
+        bio = data.get("bio") or "sin bio"
+        phone = data.get("phone") or "oculto"
+        summary = (
+            f"Resolucion Telegram @{data.get('username') or username}\n"
+            f"- Tipo: {type_label}\n"
+            f"- ID: {data['id']}\n"
+            f"- Nombre: {full_name}\n"
+            f"- Bio: {bio}\n"
+            f"- Telefono: {phone}\n"
+            f"- Flags: {flag_str}"
+        )
+    else:
+        kind = "canal" if data.get("broadcast") else "supergrupo" if data.get("megagroup") else "grupo"
+        members = data.get("participants_count")
+        members_str = str(members) if members is not None else "desconocido"
+        desc = data.get("description") or "sin descripcion"
+        summary = (
+            f"Resolucion Telegram @{data.get('username') or username}\n"
+            f"- Tipo: {kind}\n"
+            f"- ID: {data['id']}\n"
+            f"- Titulo: {data.get('title', '')}\n"
+            f"- Descripcion: {desc}\n"
+            f"- Miembros: {members_str}\n"
+            f"- Flags: {flag_str}"
+        )
+    return CommandResult(
+        summary=summary,
+        payload=data,
+        filename_prefix=f"tgresolve_{username}",
+    )
+
+
+def build_tgallchats_summary(data: dict[str, object]) -> CommandResult:
+    total = data.get("total_chats", 0)
+    groups = data.get("groups", 0)
+    channels = data.get("channels", 0)
+    summary = (
+        f"Chats accesibles de la cuenta userbot\n"
+        f"- Total: {total}\n"
+        f"- Grupos: {groups}\n"
+        f"- Canales: {channels}\n"
+        f"Archivo JSON adjunto con lista completa."
+    )
+    return CommandResult(
+        summary=summary,
+        payload=data,
+        filename_prefix="tgallchats",
+    )
+
+
+def build_tghealth_summary(data: dict[str, object]) -> CommandResult:
+    account = data.get("account_label", "desconocida")
+    authorized = "si" if data.get("authorized") else "no"
+    restrictions = data.get("restrictions", [])
+    warnings = data.get("warnings", [])
+    sessions = data.get("active_sessions", [])
+    current_sessions = [s for s in sessions if s.get("current")]
+    summary_lines = [
+        f"Salud cuenta userbot: {account}",
+        f"- Autorizada: {authorized}",
+        f"- User ID: {data.get('user_id', 'N/A')}",
+        f"- Username: @{data.get('username', 'sin username')}",
+        f"- Restricciones: {len(restrictions)}",
+        f"- Advertencias: {len(warnings)}",
+        f"- Sesiones activas: {len(sessions)}",
+        f"- Sesion actual: {len(current_sessions)}",
+    ]
+    if restrictions:
+        summary_lines.append(f"- ⚠️ Restricciones: {', '.join(restrictions)}")
+    if warnings:
+        summary_lines.append(f"- ⚠️ Advertencias: {', '.join(warnings)}")
+    ttl = data.get("account_ttl_days")
+    if ttl is not None:
+        summary_lines.append(f"- TTL cuenta: {ttl} dias")
+    return CommandResult(
+        summary="\n".join(summary_lines),
+        payload=data,
+        filename_prefix="tghealth",
+    )
+
+
+async def execute_advanced_osint_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    command: str,
+    usage_text: str,
+) -> None:
+    """Handler for advanced userbot commands: /tgallchats, /tghealth."""
+    if not await ensure_user_allowed(update, context):
+        return
+
+    message = update.effective_message
+    user_id = update.effective_user.id if update.effective_user else 0
+    config: TelegramBotConfig = context.application.bot_data["config"]
+    limiter: InMemoryRateLimiter = context.application.bot_data["rate_limiter"]
+    pool: TelegramOSINTPool | None = context.application.bot_data.get("tg_osint_pool")
+
+    if pool is None:
+        await message.reply_text(
+            "Userbot no configurado. Añade TELEGRAM_APP_API_ID, TELEGRAM_APP_API_HASH "
+            "y TELEGRAM_USERBOT_SESSION_1 al entorno."
+        )
+        return
+
+    if not limiter.allow_request(user_id):
+        record_abuse_signal(context, "rate_limit_denied", user_id, command, message.chat_id)
+        await message.reply_text("Limite de uso excedido. Espera un momento antes de reintentar.")
+        return
+
+    if not limiter.try_acquire_job_slot(user_id):
+        record_abuse_signal(context, "concurrent_job_denied", user_id, command, message.chat_id)
+        await message.reply_text("Ya tienes una tarea en curso. Espera a que termine.")
+        return
+
+    await message.reply_text("Consultando via userbot...")
+
+    try:
+        if command == "tgallchats":
+            data = await pool.get_all_chats()
+            result = build_tgallchats_summary(data)
+        elif command == "tghealth":
+            data = await pool.check_account_health()
+            result = build_tghealth_summary(data)
+        else:
+            raise ValueError(f"Comando avanzado no reconocido: {command}")
+
+        logger.info(
+            "Advanced Telegram OSINT command completed",
+            extra={"command": command, "user_id": user_id, "outcome": "success"},
+        )
+        await send_command_result(context, message.chat_id, result)
+
+    except ValueError as exc:
+        record_abuse_signal(context, "command_validation_denied", user_id, command, message.chat_id)
+        await message.reply_text(str(exc))
+    except ControlledServiceError as exc:
+        await message.reply_text(str(exc))
+    except Exception:
+        logger.exception(
+            "Advanced Telegram OSINT command failed",
+            extra={"command": command, "user_id": user_id, "outcome": "internal_error"},
+        )
+        await message.reply_text("Se produjo un error interno al procesar la solicitud.")
+    finally:
+        limiter.release_job_slot(user_id)
+
+
 async def execute_osint_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -602,9 +784,14 @@ async def execute_osint_command(
         elif command == "tginfo":
             data = await pool.lookup_user_info(username)
             result = build_tginfo_summary(data, username)
-        else:
+        elif command == "tggroupinfo":
             data = await pool.lookup_channel_info(username)
             result = build_tggroupinfo_summary(data, username)
+        elif command == "tgresolve":
+            data = await pool.resolve_username(username)
+            result = build_tgresolve_summary(data, username)
+        else:
+            raise ValueError(f"Comando userbot no reconocido: {command}")
 
         logger.info(
             "Telegram OSINT command completed",

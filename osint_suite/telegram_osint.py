@@ -35,8 +35,10 @@ try:
         UserDeactivatedError,
         UsernameInvalidError,
         UsernameNotOccupiedError,
+        AuthKeyUnregisteredError,
+        SessionPasswordNeededError,
     )
-    from telethon.tl.types import Channel, Chat, User
+    from telethon.tl.types import Channel, Chat, User, PeerUser, PeerChannel, PeerChat
 
     _TELETHON_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -56,8 +58,15 @@ _RESULT_CACHE_TTL_SECONDS = 300   # 5 min
 class _SessionState:
     """Mutable per-session state. Lock is created lazily inside the event loop."""
 
-    def __init__(self, session_path: str) -> None:
+    def __init__(
+        self,
+        session_path: str,
+        proxy: dict | None = None,
+        account_label: str = "",
+    ) -> None:
         self.session_path = session_path
+        self.proxy = proxy
+        self.account_label = account_label or session_path
         self.client: Any = None
         self._lock: Optional[asyncio.Lock] = None
         self._flood_wait_until: float = 0.0
@@ -111,9 +120,14 @@ class TelegramOSINTPool:
     """
     Pool of Telethon userbot sessions with anti-ban protection.
 
+    Supports MTProto/SOCKS5 proxies and multi-account rotation.
+
     Usage
     -----
-    pool = TelegramOSINTPool(api_id, api_hash, [session1_path, session2_path])
+    pool = TelegramOSINTPool(api_id, api_hash, [
+        {"session_path": "/path/to/session1", "proxy": {"proxy_type": "socks5", "addr": "1.2.3.4", "port": 1080}},
+        {"session_path": "/path/to/session2", "proxy": {"proxy_type": "mtproto", "addr": "5.6.7.8", "port": 80, "secret": "xxx"}},
+    ])
     await pool.start()
     info = await pool.lookup_user("someusername")
     await pool.stop()
@@ -123,7 +137,7 @@ class TelegramOSINTPool:
         self,
         api_id: int,
         api_hash: str,
-        session_paths: List[str],
+        session_paths: List[str] | List[Dict[str, Any]],
     ) -> None:
         if not _TELETHON_AVAILABLE:
             raise RuntimeError(
@@ -131,9 +145,24 @@ class TelegramOSINTPool:
             )
         self._api_id = api_id
         self._api_hash = api_hash
-        self._sessions: List[_SessionState] = [
-            _SessionState(session_path=p) for p in session_paths
-        ]
+
+        # Support both simple string paths and dict configs with proxy
+        self._sessions: List[_SessionState] = []
+        for item in session_paths:
+            if isinstance(item, dict):
+                path = item.get("session_path", "")
+                proxy = item.get("proxy")
+                label = item.get("account_label", path)
+            else:
+                path = item
+                proxy = None
+                label = path
+            if path:
+                self._sessions.append(_SessionState(
+                    session_path=path,
+                    proxy=proxy,
+                    account_label=label,
+                ))
         self._result_cache: Dict[str, Tuple[Any, float]] = {}
         self._round_robin_index = 0
 
@@ -144,23 +173,31 @@ class TelegramOSINTPool:
     async def start(self) -> None:
         """Connect all sessions. Called once on bot startup."""
         for state in self._sessions:
-            client = TelegramClient(
-                state.session_path,
-                self._api_id,
-                self._api_hash,
-            )
+            client_kwargs = {
+                "session": state.session_path,
+                "api_id": self._api_id,
+                "api_hash": self._api_hash,
+            }
+            if state.proxy:
+                client_kwargs["proxy"] = state.proxy
+
+            client = TelegramClient(**client_kwargs)
             await client.connect()
             state.client = client
             authorized = await client.is_user_authorized()
             if authorized:
                 logger.info(
                     "Userbot session connected",
-                    extra={"session": state.session_path, "authorized": True},
+                    extra={
+                        "session": state.account_label,
+                        "authorized": True,
+                        "proxy": bool(state.proxy),
+                    },
                 )
             else:
                 logger.error(
                     "Userbot session NOT authorized — session file may be invalid",
-                    extra={"session": state.session_path},
+                    extra={"session": state.account_label},
                 )
 
     async def stop(self) -> None:
@@ -336,6 +373,223 @@ class TelegramOSINTPool:
             extra={"username": username, "outcome": "success"},
         )
         return result
+
+    async def resolve_username(self, username: str) -> Dict[str, Any]:
+        """
+        Resolve any Telegram username without being in the same group.
+
+        Uses ResolveUsernameRequest which works even if you don't share
+        groups with the target. Returns user or channel info.
+        """
+        username = username.lstrip("@").strip()
+        if not username:
+            raise ValueError("Username de Telegram invalido.")
+
+        cache_key = f"resolve:{username.lower()}"
+        cached = self._get_cached_result(cache_key)
+        if cached is not None:
+            logger.info("Username resolve (cache hit)", extra={"username": username})
+            return cached
+
+        result = await self._run_read_query(
+            target=username,
+            invalid_message="Username no encontrado en Telegram.",
+            query=lambda client: client(
+                functions.contacts.ResolveUsernameRequest(username)
+            ),
+        )
+
+        if isinstance(result, User):
+            data = _extract_user_info(result)
+            data["entity_type"] = "user"
+        elif isinstance(result, (Channel, Chat)):
+            data = _extract_channel_info(result)
+            data["entity_type"] = "channel" if isinstance(result, Channel) else "chat"
+        else:
+            raise ValueError("Entidad no reconocida para este username.")
+
+        self._cache_result(cache_key, data)
+        logger.info(
+            "Username resolved",
+            extra={"username": username, "entity_type": data["entity_type"], "outcome": "success"},
+        )
+        return data
+
+    async def get_all_chats(self) -> Dict[str, Any]:
+        """
+        Get all chats accessible by the userbot account.
+
+        Uses GetAllChatsRequest to retrieve every group, channel, and chat
+        the account has access to — not just where the bot is a member.
+        """
+        state = self._pick_session()
+        if state is None:
+            raise _all_sessions_unavailable()
+
+        async with state.lock:
+            await asyncio.sleep(random.uniform(_MIN_DELAY_SECONDS, _MAX_DELAY_SECONDS))
+            state.record_request(time.monotonic())
+            try:
+                result = await state.client(
+                    functions.messages.GetAllChatsRequest(except_ids=[])
+                )
+            except Exception as exc:
+                raise _all_sessions_unavailable()
+
+        chats = []
+        groups = 0
+        channels = 0
+        users = 0
+
+        for chat in getattr(result, "chats", []):
+            if isinstance(chat, Channel):
+                channels += 1
+                chats.append({
+                    "id": chat.id,
+                    "title": getattr(chat, "title", ""),
+                    "username": getattr(chat, "username", None),
+                    "type": "canal" if getattr(chat, "broadcast", False) else "supergrupo" if getattr(chat, "megagroup", False) else "grupo",
+                    "verified": bool(getattr(chat, "verified", False)),
+                    "scam": bool(getattr(chat, "scam", False)),
+                    "participants_count": getattr(chat, "participants_count", None),
+                })
+            elif isinstance(chat, Chat):
+                groups += 1
+                chats.append({
+                    "id": chat.id,
+                    "title": getattr(chat, "title", ""),
+                    "type": "grupo",
+                    "members_count": getattr(chat, "participants_count", None),
+                })
+            elif isinstance(chat, User):
+                users += 1
+
+        data = {
+            "total_chats": len(chats),
+            "groups": groups,
+            "channels": channels,
+            "users": users,
+            "chats": chats,
+        }
+        logger.info(
+            "All chats retrieved",
+            extra={"total": len(chats), "groups": groups, "channels": channels},
+        )
+        return data
+
+    async def check_account_health(self) -> Dict[str, Any]:
+        """
+        Check the health and restrictions of the userbot account.
+
+        Returns account status, restrictions, active sessions, and
+        warning signals that indicate potential ban risk.
+        """
+        state = self._pick_session()
+        if state is None:
+            raise _all_sessions_unavailable()
+
+        health: Dict[str, Any] = {
+            "account_label": state.account_label,
+            "session_path": state.session_path,
+            "proxy_used": bool(state.proxy),
+            "connected": state.client is not None,
+            "authorized": False,
+            "restrictions": [],
+            "active_sessions": [],
+            "warnings": [],
+        }
+
+        async with state.lock:
+            if not state.client:
+                health["warnings"].append("Session not connected")
+                return health
+
+            # Check authorization
+            health["authorized"] = await state.client.is_user_authorized()
+            if not health["authorized"]:
+                health["warnings"].append("Session not authorized — re-login required")
+                return health
+
+            # Get current user info
+            try:
+                me = await state.client.get_me()
+                health["user_id"] = me.id
+                health["username"] = getattr(me, "username", None)
+                health["first_name"] = getattr(me, "first_name", None)
+                health["phone"] = getattr(me, "phone", None)
+
+                # Check restriction flags
+                if getattr(me, "restricted", False):
+                    health["restrictions"].append("Account is restricted by Telegram")
+                if getattr(me, "scam", False):
+                    health["restrictions"].append("Account flagged as scam")
+                if getattr(me, "fake", False):
+                    health["restrictions"].append("Account flagged as fake")
+                if getattr(me, "bot", False):
+                    health["warnings"].append("Account is a bot — limited API access")
+
+                # Check if phone is visible (privacy setting)
+                if not getattr(me, "phone", None):
+                    health["warnings"].append("Phone number hidden — privacy setting active")
+
+            except Exception as exc:
+                health["warnings"].append(f"Could not retrieve user info: {type(exc).__name__}")
+
+            # Get active sessions
+            try:
+                auths = await state.client(
+                    functions.account.GetAuthorizationsRequest()
+                )
+                for auth in getattr(auths, "authorizations", []):
+                    session_info = {
+                        "app_name": getattr(auth, "app_name", ""),
+                        "device_model": getattr(auth, "device_model", ""),
+                        "platform": getattr(auth, "platform", ""),
+                        "system_version": getattr(auth, "system_version", ""),
+                        "ip": getattr(auth, "ip", ""),
+                        "country": getattr(auth, "country", ""),
+                        "date_created": str(getattr(auth, "date_created", "")),
+                        "date_active": str(getattr(auth, "date_active", "")),
+                        "official": bool(getattr(auth, "official", False)),
+                        "current": bool(getattr(auth, "current", False)),
+                    }
+                    health["active_sessions"].append(session_info)
+
+                # Warn about suspicious sessions
+                non_official = [
+                    s for s in health["active_sessions"] if not s["official"]
+                ]
+                if non_official:
+                    health["warnings"].append(
+                        f"{len(non_official)} non-official session(s) detected"
+                    )
+
+            except Exception as exc:
+                health["warnings"].append(f"Could not retrieve sessions: {type(exc).__name__}")
+
+            # Check account TTL
+            try:
+                ttl = await state.client(
+                    functions.account.GetAccountTTLRequest()
+                )
+                health["account_ttl_days"] = getattr(ttl, "days", None)
+                if getattr(ttl, "days", 0) and ttl.days < 30:
+                    health["warnings"].append(
+                        f"Account self-destruct in {ttl.days} days"
+                    )
+            except Exception as exc:
+                health["warnings"].append(f"Could not check TTL: {type(exc).__name__}")
+
+        logger.info(
+            "Account health check completed",
+            extra={
+                "account": state.account_label,
+                "restrictions": len(health["restrictions"]),
+                "warnings": len(health["warnings"]),
+                "sessions": len(health["active_sessions"]),
+            },
+        )
+        return health
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -668,6 +922,18 @@ def pool_from_env() -> Optional[TelegramOSINTPool]:
         TELEGRAM_USERBOT_SESSION_1  — absolute path to .session file
         TELEGRAM_USERBOT_SESSION_2  — absolute path to .session file
 
+    Proxy support (per account):
+        TELEGRAM_PROXY_1_TYPE     — socks5, mtproto, http
+        TELEGRAM_PROXY_1_ADDR     — proxy IP or hostname
+        TELEGRAM_PROXY_1_PORT     — proxy port
+        TELEGRAM_PROXY_1_SECRET   — MTProto secret (only for mtproto type)
+        TELEGRAM_PROXY_1_USERNAME — SOCKS5 username (optional)
+        TELEGRAM_PROXY_1_PASSWORD — SOCKS5 password (optional)
+        (Same pattern for _2, _3, etc.)
+
+    Account labels:
+        TELEGRAM_ACCOUNT_LABEL_1  — friendly name for account 1
+
     Returns None if not configured (bot continues without userbot features).
     """
     if not _TELETHON_AVAILABLE:
@@ -687,26 +953,63 @@ def pool_from_env() -> Optional[TelegramOSINTPool]:
         logger.warning("TELEGRAM_APP_API_ID is not a valid integer — pool disabled")
         return None
 
-    session_paths: List[str] = []
-    for i in (1, 2):
+    session_configs: List[Dict[str, Any]] = []
+    for i in (1, 2, 3, 4, 5):
         path = os.environ.get(f"TELEGRAM_USERBOT_SESSION_{i}", "").strip()
         if not path:
             continue
-        if os.path.exists(path):
-            session_paths.append(path)
-            logger.info("Userbot session found", extra={"index": i, "path": path})
-        else:
+        if not os.path.exists(path):
             logger.warning(
                 "Userbot session file not found — skipping",
                 extra={"index": i, "path": path},
             )
+            continue
 
-    if not session_paths:
+        config: Dict[str, Any] = {
+            "session_path": path,
+            "account_label": os.environ.get(f"TELEGRAM_ACCOUNT_LABEL_{i}", f"account_{i}"),
+        }
+
+        # Check for proxy config
+        proxy_type = os.environ.get(f"TELEGRAM_PROXY_{i}_TYPE", "").strip().lower()
+        proxy_addr = os.environ.get(f"TELEGRAM_PROXY_{i}_ADDR", "").strip()
+        proxy_port = os.environ.get(f"TELEGRAM_PROXY_{i}_PORT", "").strip()
+
+        if proxy_type and proxy_addr and proxy_port:
+            proxy: Dict[str, Any] = {
+                "proxy_type": proxy_type,
+                "addr": proxy_addr,
+                "port": int(proxy_port),
+            }
+            if proxy_type == "mtproto":
+                secret = os.environ.get(f"TELEGRAM_PROXY_{i}_SECRET", "").strip()
+                if secret:
+                    proxy["secret"] = secret
+            else:
+                username = os.environ.get(f"TELEGRAM_PROXY_{i}_USERNAME", "").strip()
+                password = os.environ.get(f"TELEGRAM_PROXY_{i}_PASSWORD", "").strip()
+                if username:
+                    proxy["username"] = username
+                if password:
+                    proxy["password"] = password
+            config["proxy"] = proxy
+            logger.info(
+                "Proxy configured for account",
+                extra={"index": i, "type": proxy_type, "addr": proxy_addr},
+            )
+
+        session_configs.append(config)
+        logger.info(
+            "Userbot session found",
+            extra={"index": i, "path": path, "has_proxy": "proxy" in config},
+        )
+
+    if not session_configs:
         logger.info("No valid userbot session files found — pool disabled")
         return None
 
     logger.info(
         "TelegramOSINTPool created",
-        extra={"session_count": len(session_paths)},
+        extra={"session_count": len(session_configs)},
     )
-    return TelegramOSINTPool(api_id=api_id, api_hash=api_hash, session_paths=session_paths)
+    return TelegramOSINTPool(api_id=api_id, api_hash=api_hash, session_paths=session_configs)

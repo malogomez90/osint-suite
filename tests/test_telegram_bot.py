@@ -24,11 +24,15 @@ from osint_suite.telegram_bot import (
     username_command,
     tginfo_command,
     tggroupinfo_command,
+    tgresolve_command,
+    tgallchats_command,
+    tghealth_command,
     document_message,
     photo_message,
     send_command_result,
     run_command_job,
     run_file_job,
+    create_application,
 )
 from osint_suite.telegram_services import run_username_lookup
 from osint_suite.telegram_services import (
@@ -1739,3 +1743,220 @@ def test_run_file_job_returns_sanitized_internal_error_and_releases_slot(monkeyp
         {"chat_id": 100, "text": "Se produjo un error interno al procesar la solicitud."}
     ]
     assert limiter.try_acquire_job_slot(user_id=42) is True
+
+
+# ------------------------------------------------------------------
+# Phase D: Advanced userbot commands
+# ------------------------------------------------------------------
+
+def test_create_application_registers_advanced_userbot_commands():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    app = telegram_bot_module.create_application(config)
+    registered_commands = {
+        next(iter(handler.commands))
+        for group in app.handlers.values()
+        for handler in group
+        if hasattr(handler, "commands")
+    }
+    assert "tgresolve" in registered_commands
+    assert "tgallchats" in registered_commands
+    assert "tghealth" in registered_commands
+
+
+def test_help_text_includes_advanced_commands():
+    assert "/tgresolve" in HELP_TEXT
+    assert "/tgallchats" in HELP_TEXT
+    assert "/tghealth" in HELP_TEXT
+
+
+def test_tgresolve_command_requires_argument_when_pool_exists():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+    context.application.bot_data["tg_osint_pool"] = object()
+    asyncio.run(tgresolve_command(update, context))
+    assert update.effective_message.replies == ["Uso: /tgresolve <username>"]
+
+
+def test_tgresolve_command_replies_when_userbot_is_not_configured():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=["someuser"])
+    asyncio.run(tgresolve_command(update, context))
+    assert update.effective_message.replies == [
+        "Userbot no configurado. Añade TELEGRAM_APP_API_ID, TELEGRAM_APP_API_HASH y TELEGRAM_USERBOT_SESSION_1 al entorno."
+    ]
+
+
+def test_tgresolve_command_returns_summary_and_json(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=10)
+    update = make_update()
+    context = FakeContext(config, args=["elonmusk"])
+
+    class FakePool:
+        async def resolve_username(self, username):
+            assert username == "elonmusk"
+            return {
+                "id": 123,
+                "first_name": "Elon",
+                "last_name": "Musk",
+                "username": "elonmusk",
+                "phone": None,
+                "bio": "CEO",
+                "verified": True,
+                "bot": False,
+                "restricted": False,
+                "scam": False,
+                "fake": False,
+                "deleted": False,
+                "entity_type": "user",
+                "payload_padding": "x" * 100,
+            }
+
+    context.application.bot_data["tg_osint_pool"] = FakePool()
+    asyncio.run(tgresolve_command(update, context))
+    assert update.effective_message.replies == ["Consultando via userbot..."]
+    assert len(context.bot.messages) == 1
+    assert "Resolucion Telegram @elonmusk" in context.bot.messages[0]["text"]
+
+
+def test_tgresolve_command_surfaces_validation_error_from_pool(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=["nonexistent_user_xyz"])
+
+    class FakePool:
+        async def resolve_username(self, username):
+            raise ValueError("Username no encontrado en Telegram.")
+
+    context.application.bot_data["tg_osint_pool"] = FakePool()
+    asyncio.run(tgresolve_command(update, context))
+    assert update.effective_message.replies == [
+        "Consultando via userbot...",
+        "Username no encontrado en Telegram.",
+    ]
+
+
+def test_tgresolve_command_surfaces_controlled_failure(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=["flooded_user"])
+
+    class FakePool:
+        async def resolve_username(self, username):
+            raise ControlledServiceError("Userbot en espera por flood limit. Reintenta en unos minutos.")
+
+    context.application.bot_data["tg_osint_pool"] = FakePool()
+    asyncio.run(tgresolve_command(update, context))
+    assert any("flood limit" in r for r in update.effective_message.replies)
+
+
+def test_tgallchats_command_replies_when_userbot_is_not_configured():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+    asyncio.run(tgallchats_command(update, context))
+    assert update.effective_message.replies == [
+        "Userbot no configurado. Añade TELEGRAM_APP_API_ID, TELEGRAM_APP_API_HASH y TELEGRAM_USERBOT_SESSION_1 al entorno."
+    ]
+
+
+def test_tgallchats_command_returns_summary_and_json(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=10)
+    update = make_update()
+    context = FakeContext(config, args=[])
+
+    class FakePool:
+        async def get_all_chats(self):
+            return {
+                "total_chats": 15,
+                "groups": 8,
+                "channels": 7,
+                "users": 0,
+                "chats": [
+                    {"id": 1, "title": "Group A", "type": "grupo"},
+                    {"id": 2, "title": "Channel B", "type": "canal"},
+                ],
+                "payload_padding": "x" * 100,
+            }
+
+    context.application.bot_data["tg_osint_pool"] = FakePool()
+    asyncio.run(tgallchats_command(update, context))
+    assert update.effective_message.replies == ["Consultando via userbot..."]
+    assert len(context.bot.messages) == 1
+    assert "Chats accesibles de la cuenta userbot" in context.bot.messages[0]["text"]
+    assert "Total: 15" in context.bot.messages[0]["text"]
+
+
+def test_tghealth_command_replies_when_userbot_is_not_configured():
+    config = TelegramBotConfig(bot_token="token", allowed_users=set())
+    update = make_update()
+    context = FakeContext(config, args=[])
+    asyncio.run(tghealth_command(update, context))
+    assert update.effective_message.replies == [
+        "Userbot no configurado. Añade TELEGRAM_APP_API_ID, TELEGRAM_APP_API_HASH y TELEGRAM_USERBOT_SESSION_1 al entorno."
+    ]
+
+
+def test_tghealth_command_returns_summary_and_json(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=10)
+    update = make_update()
+    context = FakeContext(config, args=[])
+
+    class FakePool:
+        async def check_account_health(self):
+            return {
+                "account_label": "account_1",
+                "user_id": 987654,
+                "username": "testuser",
+                "first_name": "Test",
+                "phone": "+1234567890",
+                "authorized": True,
+                "restrictions": [],
+                "warnings": [],
+                "active_sessions": [
+                    {"app_name": "Telegram Desktop", "current": True, "official": True},
+                ],
+                "account_ttl_days": 365,
+                "payload_padding": "x" * 100,
+            }
+
+    context.application.bot_data["tg_osint_pool"] = FakePool()
+    asyncio.run(tghealth_command(update, context))
+    assert update.effective_message.replies == ["Consultando via userbot..."]
+    assert len(context.bot.messages) == 1
+    assert "Salud cuenta userbot: account_1" in context.bot.messages[0]["text"]
+    assert "Autorizada: si" in context.bot.messages[0]["text"]
+
+
+def test_tghealth_command_surfaces_warnings(monkeypatch):
+    config = TelegramBotConfig(bot_token="token", allowed_users=set(), result_file_threshold_bytes=10)
+    update = make_update()
+    context = FakeContext(config, args=[])
+
+    class FakePool:
+        async def check_account_health(self):
+            return {
+                "account_label": "suspicious_account",
+                "user_id": 111,
+                "username": None,
+                "first_name": "Suspicious",
+                "phone": None,
+                "authorized": True,
+                "restrictions": ["Account is restricted by Telegram"],
+                "warnings": ["2 non-official session(s) detected"],
+                "active_sessions": [
+                    {"app_name": "Unknown App", "current": False, "official": False},
+                ],
+                "account_ttl_days": 10,
+                "payload_padding": "x" * 100,
+            }
+
+    context.application.bot_data["tg_osint_pool"] = FakePool()
+    asyncio.run(tghealth_command(update, context))
+    assert update.effective_message.replies == ["Consultando via userbot..."]
+    assert len(context.bot.messages) == 1
+    msg_text = context.bot.messages[0]["text"]
+    assert "Restricciones: 1" in msg_text
+    assert "Advertencias: 1" in msg_text
+    assert "TTL cuenta: 10 dias" in msg_text
